@@ -383,6 +383,7 @@ async function runQuery(
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
 }> {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -638,7 +639,6 @@ async function main(): Promise<void> {
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
   };
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
