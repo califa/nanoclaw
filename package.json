@@ -28,7 +28,6 @@
     "google-auth-library": "^9.15.1",
     "googleapis": "^146.0.0",
     "grammy": "^1.42.0",
-    "openai": "^6.27.0",
     "pino": "^10.3.1"
   },
   "devDependencies": {
