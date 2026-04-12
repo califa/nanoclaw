@@ -40,6 +40,7 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  logTokenUsage,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -110,7 +111,10 @@ function syncOAuthCredentials(): void {
       // in sync to avoid 401s.
       // Find the Anthropic secret in OneCLI and update it with the fresh token
       try {
-        const secretsRaw = execFileSync('onecli', ['secrets', 'list']).toString();
+        const secretsRaw = execFileSync('onecli', [
+          'secrets',
+          'list',
+        ]).toString();
         const secrets = JSON.parse(secretsRaw);
         const anthropicSecret = secrets?.data?.find(
           (s: { type: string }) => s.type === 'anthropic',
@@ -466,6 +470,18 @@ async function runAgent(
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
+        if (output.usage && output.status === 'success') {
+          try {
+            logTokenUsage({
+              group_folder: group.folder,
+              chat_jid: chatJid,
+              source: 'message',
+              ...output.usage,
+            });
+          } catch {
+            /* non-critical */
+          }
+        }
         await onOutput(output);
       }
     : undefined;
@@ -791,6 +807,13 @@ async function main(): Promise<void> {
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    logUsage: (entry) => {
+      try {
+        logTokenUsage(entry);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to log token usage');
+      }
+    },
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {

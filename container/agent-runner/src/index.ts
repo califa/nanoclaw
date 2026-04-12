@@ -42,6 +42,17 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: {
+    total_cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
+    num_turns: number;
+    duration_ms: number;
+    duration_api_ms: number;
+    tools_used: string[];
+  };
 }
 
 interface SessionEntry {
@@ -416,6 +427,7 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  const toolsUsed = new Set<string>();
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -546,6 +558,15 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // Track tool use from assistant message content blocks
+      const betaMsg = (message as { message?: { content?: Array<{ type: string; name?: string }> } }).message;
+      if (betaMsg?.content) {
+        for (const block of betaMsg.content) {
+          if (block.type === 'tool_use' && block.name) {
+            toolsUsed.add(block.name);
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -569,15 +590,28 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult =
-        'result' in message ? (message as { result?: string }).result : null;
+      const msg = message as Record<string, unknown>;
+      const textResult = typeof msg.result === 'string' ? msg.result : null;
+      const costUsd = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : 0;
+      const usageData = msg.usage as Record<string, number> | undefined;
       log(
-        `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
+        `Result #${resultCount}: subtype=${message.subtype} cost=$${costUsd.toFixed(4)}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
       writeOutput({
         status: 'success',
         result: textResult || null,
         newSessionId,
+        usage: {
+          total_cost_usd: costUsd,
+          input_tokens: usageData?.input_tokens ?? 0,
+          output_tokens: usageData?.output_tokens ?? 0,
+          cache_read_tokens: usageData?.cache_read_input_tokens ?? 0,
+          cache_creation_tokens: usageData?.cache_creation_input_tokens ?? 0,
+          num_turns: typeof msg.num_turns === 'number' ? msg.num_turns : 0,
+          duration_ms: typeof msg.duration_ms === 'number' ? msg.duration_ms : 0,
+          duration_api_ms: typeof msg.duration_api_ms === 'number' ? msg.duration_api_ms : 0,
+          tools_used: [...toolsUsed],
+        },
       });
     }
   }

@@ -73,6 +73,7 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  logUsage?: (entry: import('./db.js').TokenUsageEntry) => void;
 }
 
 async function runTask(
@@ -192,6 +193,15 @@ async function runTask(
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
+          // Log token usage if available
+          if (streamedOutput.usage) {
+            deps.logUsage?.({
+              group_folder: task.group_folder,
+              chat_jid: task.chat_jid,
+              source: `task:${task.id}`,
+              ...streamedOutput.usage,
+            });
+          }
           deps.queue.notifyIdle(task.chat_jid);
           scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }

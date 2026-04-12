@@ -65,6 +65,25 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
 
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      chat_jid TEXT NOT NULL,
+      source TEXT NOT NULL,
+      total_cost_usd REAL NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      num_turns INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      duration_api_ms INTEGER NOT NULL DEFAULT 0,
+      tools_used TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_group ON token_usage(group_folder);
+
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -555,6 +574,75 @@ export function logTaskRun(log: TaskRunLog): void {
     log.result,
     log.error,
   );
+}
+
+// --- Token usage tracking ---
+
+export interface TokenUsageEntry {
+  group_folder: string;
+  chat_jid: string;
+  source: string;
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  num_turns: number;
+  duration_ms: number;
+  duration_api_ms: number;
+  tools_used?: string[];
+}
+
+export function logTokenUsage(entry: TokenUsageEntry): void {
+  db.prepare(
+    `
+    INSERT INTO token_usage (timestamp, group_folder, chat_jid, source, total_cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, num_turns, duration_ms, duration_api_ms, tools_used)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  ).run(
+    new Date().toISOString(),
+    entry.group_folder,
+    entry.chat_jid,
+    entry.source,
+    entry.total_cost_usd,
+    entry.input_tokens,
+    entry.output_tokens,
+    entry.cache_read_tokens,
+    entry.cache_creation_tokens,
+    entry.num_turns,
+    entry.duration_ms,
+    entry.duration_api_ms,
+    entry.tools_used ? JSON.stringify(entry.tools_used) : null,
+  );
+}
+
+export function getTokenUsageSummary(
+  since?: string,
+): {
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  invocation_count: number;
+} {
+  const row = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
+      COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+      COUNT(*) as invocation_count
+    FROM token_usage
+    ${since ? 'WHERE timestamp >= ?' : ''}
+  `,
+    )
+    .get(...(since ? [since] : [])) as {
+    total_cost_usd: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    invocation_count: number;
+  };
+  return row;
 }
 
 // --- Router state accessors ---

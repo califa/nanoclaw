@@ -15,7 +15,14 @@ const envConfig = readEnvFile([
   'CLAUDE_CODE_OAUTH_TOKEN',
   'HASS_TOKEN',
   'HASS_URL',
+  'OP_SERVICE_ACCOUNT_TOKEN',
 ]);
+
+// Set OP_SERVICE_ACCOUNT_TOKEN in process.env so child processes (op CLI) inherit it
+const opToken =
+  process.env.OP_SERVICE_ACCOUNT_TOKEN ||
+  envConfig.OP_SERVICE_ACCOUNT_TOKEN;
+if (opToken) process.env.OP_SERVICE_ACCOUNT_TOKEN = opToken;
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
