@@ -24,6 +24,8 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -383,7 +385,6 @@ async function runQuery(
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
 }> {
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const stream = new MessageStream();
   stream.push(prompt);
 
