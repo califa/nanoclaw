@@ -309,6 +309,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // Filter out messages from non-allowed senders (applies to all groups).
+  // If a per-chat allowlist entry exists and the sender isn't in it, drop silently.
+  {
+    const allowlistCfg = loadSenderAllowlist();
+    const chatEntry =
+      allowlistCfg.chats[chatJid] ?? allowlistCfg.default;
+    if (chatEntry.allow !== '*') {
+      const filtered = missedMessages.filter(
+        (m) => m.is_from_me || (chatEntry.allow as string[]).includes(m.sender),
+      );
+      if (filtered.length === 0) return true;
+      missedMessages.length = 0;
+      missedMessages.push(...filtered);
+    }
+  }
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);

@@ -45,9 +45,7 @@ const OP_PATH = '/opt/homebrew/bin/op';
 function getCredentials(service: string): Record<string, string> | null {
   let allowlist: CredentialAllowlist;
   try {
-    allowlist = JSON.parse(
-      fs.readFileSync(CREDENTIAL_ALLOWLIST_PATH, 'utf-8'),
-    );
+    allowlist = JSON.parse(fs.readFileSync(CREDENTIAL_ALLOWLIST_PATH, 'utf-8'));
   } catch (err) {
     logger.warn({ err }, 'Credential allowlist not found or invalid');
     return null;
@@ -64,18 +62,38 @@ function getCredentials(service: string): Record<string, string> | null {
       if (opToken) env.OP_SERVICE_ACCOUNT_TOKEN = opToken;
 
       if (field === 'one-time password') {
-        const value = execFileSync(OP_PATH, [
-          'item', 'get', entry.item, '--vault', allowlist.vault, '--otp',
-        ], { timeout: 10000, env }).toString().trim();
+        const value = execFileSync(
+          OP_PATH,
+          ['item', 'get', entry.item, '--vault', allowlist.vault, '--otp'],
+          { timeout: 10000, env },
+        )
+          .toString()
+          .trim();
         result['otp'] = value;
       } else {
-        const value = execFileSync(OP_PATH, [
-          'item', 'get', entry.item, '--vault', allowlist.vault, '--fields', field, '--reveal',
-        ], { timeout: 10000, env }).toString().trim();
+        const value = execFileSync(
+          OP_PATH,
+          [
+            'item',
+            'get',
+            entry.item,
+            '--vault',
+            allowlist.vault,
+            '--fields',
+            field,
+            '--reveal',
+          ],
+          { timeout: 10000, env },
+        )
+          .toString()
+          .trim();
         result[field] = value;
       }
     } catch (err) {
-      logger.warn({ err, service, field }, 'Failed to retrieve credential field');
+      logger.warn(
+        { err, service, field },
+        'Failed to retrieve credential field',
+      );
     }
   }
   return Object.keys(result).length > 0 ? result : null;
@@ -245,9 +263,7 @@ async function createBoTab(): Promise<{
     await moveTabsToBoGroup([chromeId]);
     // Deactivate the new tab so it doesn't steal focus from the user.
     try {
-      await evalInExt<void>(
-        `chrome.tabs.update(${chromeId}, {active: false})`,
-      );
+      await evalInExt<void>(`chrome.tabs.update(${chromeId}, {active: false})`);
     } catch {
       // Non-critical
     }
@@ -518,7 +534,6 @@ export function startHeliumApi(): http.Server {
         ).toISOString();
         const summary = getTokenUsageSummary(since);
         jsonResp(res, 200, { period, since, ...summary });
-
       } else {
         jsonResp(res, 404, { error: 'Not found' });
       }

@@ -39,6 +39,7 @@ export class SlackChannel implements Channel {
   private userNameCache = new Map<string, string>();
 
   private opts: SlackChannelOpts;
+  private lastUserMessageTs = new Map<string, string>();
 
   constructor(opts: SlackChannelOpts) {
     this.opts = opts;
@@ -94,8 +95,7 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[jid]) return;
 
-      const isBotMessage =
-        !!msg.bot_id || msg.user === this.botUserId;
+      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
       let senderName: string;
       if (isBotMessage) {
@@ -113,9 +113,16 @@ export class SlackChannel implements Channel {
       let content = msg.text;
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
-        if (content.includes(mentionPattern) && !TRIGGER_PATTERN.test(content)) {
+        if (
+          content.includes(mentionPattern) &&
+          !TRIGGER_PATTERN.test(content)
+        ) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
+      }
+
+      if (!isBotMessage) {
+        this.lastUserMessageTs.set(jid, msg.ts);
       }
 
       this.opts.onMessage(jid, {
@@ -142,10 +149,7 @@ export class SlackChannel implements Channel {
       this.botUserId = auth.user_id as string;
       logger.info({ botUserId: this.botUserId }, 'Connected to Slack');
     } catch (err) {
-      logger.warn(
-        { err },
-        'Connected to Slack but failed to get bot user ID',
-      );
+      logger.warn({ err }, 'Connected to Slack but failed to get bot user ID');
     }
 
     this.connected = true;
@@ -204,11 +208,29 @@ export class SlackChannel implements Channel {
     await this.app.stop();
   }
 
-  // Slack does not expose a typing indicator API for bots.
-  // This no-op satisfies the Channel interface so the orchestrator
-  // doesn't need channel-specific branching.
-  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
-    // no-op: Slack Bot API has no typing indicator endpoint
+  // Slack has no native typing indicator for bots.
+  // Instead, add/remove a ⏳ reaction on the triggering user message.
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+    const channelId = jid.replace(/^slack:/, '');
+    const ts = this.lastUserMessageTs.get(jid);
+    if (!ts) return;
+    try {
+      if (isTyping) {
+        await this.app.client.reactions.add({
+          channel: channelId,
+          timestamp: ts,
+          name: 'hourglass_flowing_sand',
+        });
+      } else {
+        await this.app.client.reactions.remove({
+          channel: channelId,
+          timestamp: ts,
+          name: 'hourglass_flowing_sand',
+        });
+      }
+    } catch {
+      // Reaction may already exist or be gone — ignore
+    }
   }
 
   /**
@@ -245,9 +267,7 @@ export class SlackChannel implements Channel {
     }
   }
 
-  private async resolveUserName(
-    userId: string,
-  ): Promise<string | undefined> {
+  private async resolveUserName(userId: string): Promise<string | undefined> {
     if (!userId) return undefined;
 
     const cached = this.userNameCache.get(userId);

@@ -616,9 +616,7 @@ export function logTokenUsage(entry: TokenUsageEntry): void {
   );
 }
 
-export function getTokenUsageSummary(
-  since?: string,
-): {
+export function getTokenUsageSummary(since?: string): {
   total_cost_usd: number;
   total_input_tokens: number;
   total_output_tokens: number;
