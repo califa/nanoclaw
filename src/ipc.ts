@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -460,6 +461,39 @@ export async function processTaskIpc(
           'Invalid register_group request - missing required fields',
         );
       }
+      break;
+
+    case 'restart_helium':
+      // Only main group can restart host apps
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized restart_helium attempt blocked',
+        );
+        break;
+      }
+      logger.info(
+        { sourceGroup },
+        'Restarting Helium with remote debugging port',
+      );
+      execFile('pkill', ['-x', 'Helium'], () => {
+        // Ignore exit code — Helium may not have been running
+        setTimeout(() => {
+          execFile(
+            'open',
+            ['-a', 'Helium', '--args', '--remote-debugging-port=9222'],
+            (err) => {
+              if (err) {
+                logger.error({ err }, 'Failed to launch Helium');
+              } else {
+                logger.info(
+                  'Helium launched with remote debugging on port 9222',
+                );
+              }
+            },
+          );
+        }, 1000);
+      });
       break;
 
     default:
