@@ -120,11 +120,9 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 function writeOutput(output: ContainerOutput): void {
-  // Use synchronous fd write to bypass Node.js pipe buffering.
-  // console.log buffers writes to non-TTY stdout, which can cause
-  // output markers to be delayed when piped through Docker.
-  const data = `${OUTPUT_START_MARKER}\n${JSON.stringify(output)}\n${OUTPUT_END_MARKER}\n`;
-  fs.writeFileSync(1, data);
+  console.log(OUTPUT_START_MARKER);
+  console.log(JSON.stringify(output));
+  console.log(OUTPUT_END_MARKER);
 }
 
 function log(message: string): void {
@@ -437,15 +435,6 @@ async function runQuery(
   }
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
-  }
-
-  // Detect whether the prompt needs cloud connectors (Notion, Slack, Calendar, etc.)
-  // to avoid loading ~200 deferred tool names into context for every message.
-  const cloudKeywords =
-    /\b(notion|slack|linear|calendar|schedule|meeting|pylon|attention|figma|gmail|email|gdrive|google drive)\b/i;
-  const needsCloudConnectors = cloudKeywords.test(prompt);
-  if (!needsCloudConnectors) {
-    sdkEnv.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
   }
 
   for await (const message of query({

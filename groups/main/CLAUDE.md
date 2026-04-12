@@ -112,10 +112,6 @@ Use standard `agent-browser open <url>` without `--cdp`. No tab group management
 
 For public sites with no login required, use standard `agent-browser open <url>` without connecting to Helium.
 
-## Cloud Integrations
-
-You have access to cloud integrations (Notion, Slack, Linear, Google Calendar, Pylon, Attention, Figma, Google Drive) but they are loaded on demand — only when the user's message mentions a relevant service. If you need a cloud tool but don't see it in your available tools, tell the user to mention the service name in their next message so it loads.
-
 ## Email Notifications
 
 When you receive an email notification (messages starting with `[Email from ...`), inform the user about it but do NOT reply to or send the email unless specifically asked. You have Gmail tools available for reading, searching, and drafting — use them when the user asks. Do not use the send tool under any circumstances.
