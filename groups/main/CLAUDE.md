@@ -380,3 +380,51 @@ If a user wants tasks running more than ~2x daily and a script can't reduce agen
 - Suggest restructuring with a script that checks the condition first
 - If the user needs an LLM to evaluate data, suggest using an API key with direct Anthropic API calls inside the script
 - Help the user find the minimum viable frequency
+
+---
+
+## LLM Wiki
+
+You maintain a persistent, compounding knowledge base about Joel's life and work. This follows the Karpathy LLM Wiki pattern — knowledge is compiled once into structured wiki pages rather than re-derived on every query.
+
+### Architecture
+
+Three layers:
+1. **Raw sources** (read-only at `/workspace/extra/brain/`) — Joel's Obsidian vault: meeting notes, daily notes, brain dumps, contacts. Plus Gmail, Slack, Linear, Calendar via MCP tools.
+2. **The wiki** (read-write at `/workspace/extra/wiki/`) — Your maintained output. Structured markdown pages organized by category.
+3. **The schema** (`/workspace/extra/wiki/schema.md`) — Full conventions. **Read this file before any wiki operation.**
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `/workspace/extra/wiki/schema.md` | Full conventions, page format, operations — read first |
+| `/workspace/extra/wiki/index.md` | Master index of all wiki pages — always consult |
+| `/workspace/extra/wiki/log.md` | Append-only activity log — always update after changes |
+
+### Categories
+
+| Directory | What Goes Here |
+|-----------|---------------|
+| `wiki/people/` | Entity pages for individuals Joel works with |
+| `wiki/projects/` | Initiatives, workstreams, products |
+| `wiki/company/` | Unify org context, strategy, processes |
+| `wiki/decisions/` | Key decisions with rationale |
+| `wiki/concepts/` | Mental models, recurring themes, domain knowledge |
+| `wiki/synthesis/` | Cross-source analysis, weekly digests |
+| `wiki/personal/` | Joel's goals, preferences, operating style |
+
+### Operations
+
+**Ingest** — Process new sources one at a time. Read the full source, create/update all relevant wiki pages, add cross-references, update index, log the activity. NEVER batch-process multiple sources together.
+
+**Query** — Search the wiki via index.md to answer questions. File reusable answers as new pages.
+
+**Lint** — Health check: find contradictions, orphans, stale content, missing pages, gaps.
+
+### When to Use the Wiki
+
+- **Scheduled ingest tasks** will trigger you with new meeting notes, email digests, etc. — process them into the wiki
+- **When Joel asks about people, projects, or past decisions** — check the wiki first, then supplement from sources
+- **Ambient improvement** — when a topic comes up repeatedly in conversation, consider adding a wiki page
+- **Lint passes** run weekly — report findings and offer fixes
