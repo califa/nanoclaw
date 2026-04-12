@@ -8,7 +8,6 @@ import os from 'os';
 import path from 'path';
 
 import {
-  CLAUDE_CODE_OAUTH_TOKEN,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -181,6 +180,26 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+  // Sync full-scope OAuth credentials so the SDK can load cloud MCP connectors
+  // (Notion, Slack, Linear, etc.). The .credentials.json file preserves all
+  // scopes including "user:mcp_servers" — the CLAUDE_CODE_OAUTH_TOKEN env var
+  // only gets "user:inference" which blocks cloud connector access.
+  // OneCLI also injects CLAUDE_CODE_OAUTH_TOKEN=placeholder into the container
+  // env, which the SDK picks up and hardcodes to inference-only scopes. We must
+  // clear it so the SDK falls back to reading .credentials.json with full scopes.
+  const oauthCredsFile = path.join(
+    os.homedir(),
+    '.config',
+    'nanoclaw',
+    'claude-oauth.json',
+  );
+  if (fs.existsSync(oauthCredsFile)) {
+    fs.copyFileSync(
+      oauthCredsFile,
+      path.join(groupSessionsDir, '.credentials.json'),
+    );
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -271,10 +290,6 @@ async function buildContainerArgs(
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
-  // Pass OAuth token so the SDK authenticates as the user (unlocks cloud connectors)
-  if (CLAUDE_CODE_OAUTH_TOKEN) {
-    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
-  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
@@ -284,6 +299,10 @@ async function buildContainerArgs(
   });
   if (onecliApplied) {
     logger.info({ containerName }, 'OneCLI gateway config applied');
+    // OneCLI injects CLAUDE_CODE_OAUTH_TOKEN=placeholder which makes the SDK
+    // hardcode scopes to ["user:inference"], blocking cloud MCP connectors.
+    // Clear it so the SDK reads .credentials.json (with full scopes) instead.
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=');
   } else {
     logger.warn(
       { containerName },

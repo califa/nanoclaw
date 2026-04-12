@@ -67,6 +67,8 @@ import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { execFileSync } from 'child_process';
+import os from 'os';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -76,6 +78,39 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+
+/**
+ * Sync OAuth credentials from macOS Keychain to a file that containers can read.
+ * The keychain stores the full-scope token (including user:mcp_servers) which
+ * enables cloud MCP connectors inside containers.
+ */
+function syncOAuthCredentials(): void {
+  const destDir = path.join(os.homedir(), '.config', 'nanoclaw');
+  const destFile = path.join(destDir, 'claude-oauth.json');
+  try {
+    const raw = execFileSync('security', [
+      'find-generic-password',
+      '-s',
+      'Claude Code-credentials',
+      '-w',
+    ]).toString();
+    const data = JSON.parse(raw);
+    const oauth = data?.claudeAiOauth;
+    if (oauth?.accessToken && oauth?.refreshToken && oauth?.scopes) {
+      fs.mkdirSync(destDir, { recursive: true });
+      // Save the full keychain structure — the SDK reads .credentials.json
+      // and expects the same format as the keychain entry.
+      fs.writeFileSync(destFile, JSON.stringify(data));
+      logger.info('OAuth credentials synced from keychain');
+    }
+  } catch {
+    if (fs.existsSync(destFile)) {
+      logger.debug('Keychain sync failed, using cached credentials');
+    } else {
+      logger.warn('No OAuth credentials available — cloud connectors will be unavailable');
+    }
+  }
+}
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -751,6 +786,7 @@ async function main(): Promise<void> {
       }
     },
   });
+  syncOAuthCredentials();
   startHeliumApi();
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
