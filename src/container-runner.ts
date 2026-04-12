@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  CLAUDE_CODE_OAUTH_TOKEN,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -268,6 +269,11 @@ async function buildContainerArgs(
   // Forward Ollama admin tools flag if enabled
   if (OLLAMA_ADMIN_TOOLS) {
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
+  }
+
+  // Pass OAuth token so the SDK authenticates as the user (unlocks cloud connectors)
+  if (CLAUDE_CODE_OAUTH_TOKEN) {
+    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
   }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
