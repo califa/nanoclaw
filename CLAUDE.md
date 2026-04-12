@@ -75,6 +75,24 @@ systemctl --user restart nanoclaw
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
+## Self-Improvement
+
+Log learnings, errors, and feature requests to `.learnings/` for continuous improvement. Review these before major tasks.
+
+| Situation | File |
+|-----------|------|
+| Command/operation fails | `.learnings/ERRORS.md` |
+| User corrects approach | `.learnings/LEARNINGS.md` (category: `correction`) |
+| Knowledge was wrong/outdated | `.learnings/LEARNINGS.md` (category: `knowledge_gap`) |
+| Found better approach | `.learnings/LEARNINGS.md` (category: `best_practice`) |
+| User wants missing feature | `.learnings/FEATURE_REQUESTS.md` |
+
+Entry format: `## [LRN-YYYYMMDD-XXX] category` with Summary, Details, Suggested Action. Use `ERR-`/`FEAT-` prefixes for errors/features. Keep entries concise. Promote broadly applicable learnings to this CLAUDE.md.
+
+## Automations
+
+When the user asks about automations, workflows, or integrating services — always implement them using the local n8n instance. Bo has `mcp__n8n__*` tools for creating/editing workflows. The n8n API runs at `http://localhost:5678` (containers reach it via `host.docker.internal:5678`). API key is in `.env` as `N8N_API_KEY`.
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.

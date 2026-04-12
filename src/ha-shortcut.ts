@@ -81,9 +81,7 @@ function findEntity(query: string, domains?: string[]): HassEntity | undefined {
   const q = query.toLowerCase().trim();
   // Strip trailing "light(s)" / "switch" / "fan" — users say "office lights"
   // but entity is "Joel Office Office"
-  const qClean = q
-    .replace(/\s*(lights?|switch(?:es)?|fans?)\s*$/i, '')
-    .trim();
+  const qClean = q.replace(/\s*(lights?|switch(?:es)?|fans?)\s*$/i, '').trim();
   const candidates = domains
     ? entityCache.filter((e) => domains.includes(e.domain))
     : entityCache;

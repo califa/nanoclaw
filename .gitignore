@@ -18,6 +18,9 @@ groups/global/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 
+# Self-improvement logs (local per-installation)
+.learnings/
+
 # Secrets
 *.keys.json
 .env
