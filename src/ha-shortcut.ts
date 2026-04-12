@@ -11,10 +11,9 @@
 import { HASS_TOKEN, HASS_URL } from './config.js';
 import { logger } from './logger.js';
 
-const HASS_HOST_URL = HASS_URL?.replace(
-  'host.docker.internal',
-  'localhost',
-) || 'http://localhost:8123';
+const HASS_HOST_URL =
+  HASS_URL?.replace('host.docker.internal', 'localhost') ||
+  'http://localhost:8123';
 
 interface HassEntity {
   entity_id: string;
@@ -78,43 +77,60 @@ async function callService(
   }
 }
 
-function findEntity(
-  query: string,
-  domains?: string[],
-): HassEntity | undefined {
+function findEntity(query: string, domains?: string[]): HassEntity | undefined {
   const q = query.toLowerCase().trim();
+  // Strip trailing "light(s)" / "switch" / "fan" — users say "office lights"
+  // but entity is "Joel Office Office"
+  const qClean = q
+    .replace(/\s*(lights?|switch(?:es)?|fans?)\s*$/i, '')
+    .trim();
   const candidates = domains
     ? entityCache.filter((e) => domains.includes(e.domain))
     : entityCache;
 
   // Exact friendly name match
-  const exact = candidates.find(
-    (e) => e.friendly_name.toLowerCase() === q,
-  );
-  if (exact) return exact;
+  for (const query of [q, qClean]) {
+    if (!query) continue;
+    const exact = candidates.find(
+      (e) => e.friendly_name.toLowerCase() === query,
+    );
+    if (exact) return exact;
+  }
 
-  // Contains match
-  const contains = candidates.find(
-    (e) => e.friendly_name.toLowerCase().includes(q) ||
-           q.includes(e.friendly_name.toLowerCase()),
-  );
-  if (contains) return contains;
+  // Contains match (both directions)
+  for (const query of [q, qClean]) {
+    if (!query) continue;
+    const contains = candidates.find(
+      (e) =>
+        e.friendly_name.toLowerCase().includes(query) ||
+        query.includes(e.friendly_name.toLowerCase()),
+    );
+    if (contains) return contains;
+  }
 
-  // Fuzzy: match on entity_id parts
-  const idMatch = candidates.find((e) => {
-    const parts = e.entity_id.replace(/[._]/g, ' ').toLowerCase();
-    return parts.includes(q) || q.split(' ').every((w) => parts.includes(w));
-  });
-  return idMatch;
+  // Word overlap: all words in query appear in entity name or id
+  for (const query of [q, qClean]) {
+    if (!query) continue;
+    const words = query.split(/\s+/).filter((w) => w.length > 1);
+    if (words.length === 0) continue;
+    const match = candidates.find((e) => {
+      const haystack =
+        e.friendly_name.toLowerCase() +
+        ' ' +
+        e.entity_id.replace(/[._]/g, ' ').toLowerCase();
+      return words.every((w) => haystack.includes(w));
+    });
+    if (match) return match;
+  }
+
+  return undefined;
 }
 
 /**
  * Try to handle a message as an HA shortcut.
  * Returns the response text if handled, or null to fall through to the agent.
  */
-export async function tryHaShortcut(
-  message: string,
-): Promise<string | null> {
+export async function tryHaShortcut(message: string): Promise<string | null> {
   if (!HASS_TOKEN) return null;
   await refreshEntities();
   if (entityCache.length === 0) return null;
@@ -122,7 +138,10 @@ export async function tryHaShortcut(
   const msg = message.toLowerCase().trim();
 
   // ── "lights on/off" (all lights) — check BEFORE individual on/off ─
-  if (/^(?:all\s+)?lights?\s+(on|off)$/.test(msg) || /^(on|off)\s+(?:all\s+)?lights?$/.test(msg)) {
+  if (
+    /^(?:all\s+)?lights?\s+(on|off)$/.test(msg) ||
+    /^(on|off)\s+(?:all\s+)?lights?$/.test(msg)
+  ) {
     const action = msg.includes('off') ? 'turn_off' : 'turn_on';
     const ok = await callService('light', action, 'all');
     return ok
@@ -131,15 +150,21 @@ export async function tryHaShortcut(
   }
 
   // ── AC / climate — check BEFORE generic on/off ────────────────────
-  const acMatch = msg.match(/^(?:turn\s+)?(?:the\s+)?(?:ac|air\s*con(?:ditioning)?|climate|hvac)\s+(on|off)$|^(on|off)\s+(?:the\s+)?(?:ac|air\s*con(?:ditioning)?|climate|hvac)$/);
+  const acMatch = msg.match(
+    /^(?:turn\s+)?(?:the\s+)?(?:ac|air\s*con(?:ditioning)?|climate|hvac)\s+(on|off)$|^(on|off)\s+(?:the\s+)?(?:ac|air\s*con(?:ditioning)?|climate|hvac)$/,
+  );
   if (acMatch) {
-    const action = (acMatch[1] || acMatch[2]);
-    const entity = findEntity('ac', ['climate']) || entityCache.find((e) => e.domain === 'climate');
+    const action = acMatch[1] || acMatch[2];
+    const entity =
+      findEntity('ac', ['climate']) ||
+      entityCache.find((e) => e.domain === 'climate');
     if (entity) {
-      const ok = await callService('climate', action === 'on' ? 'turn_on' : 'turn_off', entity.entity_id);
-      return ok
-        ? `AC turned ${action}`
-        : 'Failed to control AC';
+      const ok = await callService(
+        'climate',
+        action === 'on' ? 'turn_on' : 'turn_off',
+        entity.entity_id,
+      );
+      return ok ? `AC turned ${action}` : 'Failed to control AC';
     }
   }
 
@@ -175,14 +200,11 @@ export async function tryHaShortcut(
   }
 
   // ── Open/close cover ──────────────────────────────────────────────
-  const coverMatch = msg.match(
-    /^(open|close)\s+(?:the\s+)?(.+)$/,
-  );
+  const coverMatch = msg.match(/^(open|close)\s+(?:the\s+)?(.+)$/);
   if (coverMatch) {
     const entity = findEntity(coverMatch[2], ['cover']);
     if (entity) {
-      const service =
-        coverMatch[1] === 'open' ? 'open_cover' : 'close_cover';
+      const service = coverMatch[1] === 'open' ? 'open_cover' : 'close_cover';
       const ok = await callService('cover', service, entity.entity_id);
       return ok
         ? `${entity.friendly_name} ${coverMatch[1]}ed`

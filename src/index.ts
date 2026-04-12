@@ -103,6 +103,24 @@ function syncOAuthCredentials(): void {
       // and expects the same format as the keychain entry.
       fs.writeFileSync(destFile, JSON.stringify(data));
       logger.info('OAuth credentials synced from keychain');
+
+      // Also update OneCLI's stored Anthropic credential with the fresh
+      // keychain token. The keychain token is short-lived (~1h) and OneCLI's
+      // proxy replaces auth headers with its stored value, so it must stay
+      // in sync to avoid 401s.
+      try {
+        execFileSync('onecli', [
+          'secrets',
+          'update',
+          '--id',
+          'f3497443-4e50-4648-bea8-5261aee9dd3f',
+          '--value',
+          oauth.accessToken,
+        ]);
+        logger.info('OneCLI Anthropic credential refreshed from keychain');
+      } catch {
+        logger.debug('OneCLI credential refresh failed (non-critical)');
+      }
     }
   } catch {
     if (fs.existsSync(destFile)) {
