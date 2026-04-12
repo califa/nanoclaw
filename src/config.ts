@@ -65,7 +65,9 @@ export const CLAUDE_CODE_OAUTH_TOKEN =
   process.env.CLAUDE_CODE_OAUTH_TOKEN || envConfig.CLAUDE_CODE_OAUTH_TOKEN;
 export const HASS_TOKEN = process.env.HASS_TOKEN || envConfig.HASS_TOKEN;
 export const HASS_URL =
-  process.env.HASS_URL || envConfig.HASS_URL || 'http://host.docker.internal:8123';
+  process.env.HASS_URL ||
+  envConfig.HASS_URL ||
+  'http://host.docker.internal:8123';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

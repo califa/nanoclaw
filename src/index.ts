@@ -62,6 +62,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { tryHaShortcut } from './ha-shortcut.js';
 import { startHeliumApi } from './helium-api.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
@@ -107,7 +108,9 @@ function syncOAuthCredentials(): void {
     if (fs.existsSync(destFile)) {
       logger.debug('Keychain sync failed, using cached credentials');
     } else {
-      logger.warn('No OAuth credentials available — cloud connectors will be unavailable');
+      logger.warn(
+        'No OAuth credentials available — cloud connectors will be unavailable',
+      );
     }
   }
 }
@@ -289,6 +292,28 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
+
+  // ── HA shortcut: intercept simple smart-home commands ──────────────
+  // If the latest message is a simple HA command, execute directly via
+  // the REST API and skip the full Claude pipeline (sub-second response).
+  if (missedMessages.length === 1) {
+    const lastMsg = missedMessages[missedMessages.length - 1];
+    // Strip trigger prefix if present
+    const triggerPattern = getTriggerPattern(group.trigger);
+    const stripped = lastMsg.content.trim().replace(triggerPattern, '').trim();
+    const shortcutResult = await tryHaShortcut(stripped);
+    if (shortcutResult) {
+      // Advance cursor
+      lastAgentTimestamp[chatJid] = lastMsg.timestamp;
+      saveState();
+      logger.info(
+        { group: group.name, shortcut: stripped },
+        'HA shortcut executed',
+      );
+      await channel.sendMessage(chatJid, shortcutResult);
+      return true;
+    }
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -539,6 +564,9 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
+          // Show typing immediately so the user sees Bo is working
+          channel.setTyping?.(chatJid, true)?.catch(() => {});
+
           // Pull all messages since lastAgentTimestamp so non-trigger
           // context that accumulated between triggers is included.
           const allPending = getMessagesSince(
@@ -556,15 +584,13 @@ async function startMessageLoop(): Promise<void> {
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
+            // Don't advance lastAgentTimestamp here. The pipe is
+            // fire-and-forget — if the container fails to deliver output,
+            // advancing the cursor would permanently lose the message.
+            // Leaving it behind means the message stays in context for
+            // the next processGroupMessages call (safe either way:
+            // if pipe worked, Bo's response is already in conversation;
+            // if pipe failed, the message gets reprocessed).
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);

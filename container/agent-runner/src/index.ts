@@ -494,14 +494,14 @@ async function runQuery(
           },
         },
         gmail: {
-          command: 'npx',
-          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+          command: 'gmail-mcp',
+          args: [],
         },
         ...(process.env.N8N_API_KEY
           ? {
               n8n: {
-                command: 'npx',
-                args: ['-y', 'n8n-mcp'],
+                command: 'n8n-mcp',
+                args: [],
                 env: {
                   N8N_API_URL: process.env.N8N_API_URL || 'http://host.docker.internal:5678',
                   N8N_API_KEY: process.env.N8N_API_KEY,
@@ -520,8 +520,8 @@ async function runQuery(
         ...(process.env.HASS_TOKEN
           ? {
               homeassistant: {
-                command: 'npx',
-                args: ['-y', '@jango-blockchained/homeassistant-mcp'],
+                command: 'homeassistant-mcp',
+                args: [],
                 env: {
                   HASS_TOKEN: process.env.HASS_TOKEN,
                   HASS_HOST: process.env.HASS_URL || 'http://host.docker.internal:8123',
