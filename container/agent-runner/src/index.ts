@@ -120,9 +120,12 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 function writeOutput(output: ContainerOutput): void {
-  console.log(OUTPUT_START_MARKER);
-  console.log(JSON.stringify(output));
-  console.log(OUTPUT_END_MARKER);
+  // Write directly to fd 1 (stdout) bypassing Node.js stream buffering.
+  // console.log buffers writes to non-TTY pipes — when the container is
+  // idle-waiting for IPC input, the buffer may never flush, causing output
+  // markers to silently stall in the pipe and never reach the host process.
+  // eslint-disable-next-line no-restricted-syntax
+  fs.writeFileSync(1, `${OUTPUT_START_MARKER}\n${JSON.stringify(output)}\n${OUTPUT_END_MARKER}\n`);
 }
 
 function log(message: string): void {
@@ -472,7 +475,9 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
+        'mcp__n8n__*',
         'mcp__ollama__*',
+        'mcp__homeassistant__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -492,10 +497,38 @@ async function runQuery(
           command: 'npx',
           args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
         },
+        ...(process.env.N8N_API_KEY
+          ? {
+              n8n: {
+                command: 'npx',
+                args: ['-y', 'n8n-mcp'],
+                env: {
+                  N8N_API_URL: process.env.N8N_API_URL || 'http://host.docker.internal:5678',
+                  N8N_API_KEY: process.env.N8N_API_KEY,
+                  MCP_MODE: 'stdio',
+                  NODE_ENV: 'production',
+                  LOG_LEVEL: 'error',
+                  DISABLE_CONSOLE_OUTPUT: 'true',
+                },
+              },
+            }
+          : {}),
         ollama: {
           command: 'node',
           args: [path.join(__dirname, 'ollama-mcp-stdio.js')],
         },
+        ...(process.env.HASS_TOKEN
+          ? {
+              homeassistant: {
+                command: 'npx',
+                args: ['-y', '@jango-blockchained/homeassistant-mcp'],
+                env: {
+                  HASS_TOKEN: process.env.HASS_TOKEN,
+                  HASS_HOST: process.env.HASS_URL || 'http://host.docker.internal:8123',
+                },
+              },
+            }
+          : {}),
       },
       hooks: {
         PreCompact: [

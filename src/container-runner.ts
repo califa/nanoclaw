@@ -13,7 +13,10 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
+  HASS_TOKEN,
+  HASS_URL,
   IDLE_TIMEOUT,
+  N8N_API_KEY,
   OLLAMA_ADMIN_TOOLS,
   ONECLI_URL,
   TIMEZONE,
@@ -290,6 +293,17 @@ async function buildContainerArgs(
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
 
+  // Forward n8n API key for workflow automation MCP
+  if (N8N_API_KEY) {
+    args.push('-e', `N8N_API_KEY=${N8N_API_KEY}`);
+    args.push('-e', 'N8N_API_URL=http://host.docker.internal:5678');
+  }
+
+  // Forward Home Assistant token for smart home control MCP
+  if (HASS_TOKEN) {
+    args.push('-e', `HASS_TOKEN=${HASS_TOKEN}`);
+    args.push('-e', `HASS_URL=${HASS_URL}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.

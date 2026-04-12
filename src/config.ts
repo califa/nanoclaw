@@ -9,9 +9,12 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'OLLAMA_ADMIN_TOOLS',
+  'N8N_API_KEY',
   'ONECLI_URL',
   'TZ',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'HASS_TOKEN',
+  'HASS_URL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -21,6 +24,8 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const OLLAMA_ADMIN_TOOLS =
   (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
+export const N8N_API_KEY =
+  process.env.N8N_API_KEY || envConfig.N8N_API_KEY || '';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
@@ -58,6 +63,9 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
 export const CLAUDE_CODE_OAUTH_TOKEN =
   process.env.CLAUDE_CODE_OAUTH_TOKEN || envConfig.CLAUDE_CODE_OAUTH_TOKEN;
+export const HASS_TOKEN = process.env.HASS_TOKEN || envConfig.HASS_TOKEN;
+export const HASS_URL =
+  process.env.HASS_URL || envConfig.HASS_URL || 'http://host.docker.internal:8123';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
