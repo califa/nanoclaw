@@ -108,16 +108,24 @@ function syncOAuthCredentials(): void {
       // keychain token. The keychain token is short-lived (~1h) and OneCLI's
       // proxy replaces auth headers with its stored value, so it must stay
       // in sync to avoid 401s.
+      // Find the Anthropic secret in OneCLI and update it with the fresh token
       try {
-        execFileSync('onecli', [
-          'secrets',
-          'update',
-          '--id',
-          'f3497443-4e50-4648-bea8-5261aee9dd3f',
-          '--value',
-          oauth.accessToken,
-        ]);
-        logger.info('OneCLI Anthropic credential refreshed from keychain');
+        const secretsRaw = execFileSync('onecli', ['secrets', 'list']).toString();
+        const secrets = JSON.parse(secretsRaw);
+        const anthropicSecret = secrets?.data?.find(
+          (s: { type: string }) => s.type === 'anthropic',
+        );
+        if (anthropicSecret?.id) {
+          execFileSync('onecli', [
+            'secrets',
+            'update',
+            '--id',
+            anthropicSecret.id,
+            '--value',
+            oauth.accessToken,
+          ]);
+          logger.info('OneCLI Anthropic credential refreshed from keychain');
+        }
       } catch {
         logger.debug('OneCLI credential refresh failed (non-critical)');
       }
