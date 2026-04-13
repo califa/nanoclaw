@@ -258,8 +258,18 @@ async function runTask(
     if (newFailures >= MAX_RETRIES) {
       if (!task.heal_attempted) {
         // Run the healer before giving up
-        logger.info({ taskId: task.id, failures: newFailures }, 'Task hit retry limit, running healer');
-        updateTaskAfterFailure(task.id, nextRun, resultSummary, null, newFailures, true);
+        logger.info(
+          { taskId: task.id, failures: newFailures },
+          'Task hit retry limit, running healer',
+        );
+        updateTaskAfterFailure(
+          task.id,
+          nextRun,
+          resultSummary,
+          null,
+          newFailures,
+          true,
+        );
 
         const healerOutput = await runHealerTask(task, deps);
         const healed = parseHealedSignal(healerOutput);
@@ -267,22 +277,44 @@ async function runTask(
 
         if (healed) {
           // Healer fixed it — schedule a retry soon and reset failure count
-          const retryAt = new Date(Date.now() + HEAL_RETRY_DELAY_MS).toISOString();
-          logger.info({ taskId: task.id, fix: healed }, 'Healer succeeded, scheduling retry');
-          updateTaskAfterFailure(task.id, nextRun, `[Healed] ${healed.slice(0, 200)}`, retryAt, 0);
+          const retryAt = new Date(
+            Date.now() + HEAL_RETRY_DELAY_MS,
+          ).toISOString();
+          logger.info(
+            { taskId: task.id, fix: healed },
+            'Healer succeeded, scheduling retry',
+          );
+          updateTaskAfterFailure(
+            task.id,
+            nextRun,
+            `[Healed] ${healed.slice(0, 200)}`,
+            retryAt,
+            0,
+          );
         } else {
           // Healer couldn't fix it — notify user with diagnosis
-          const diagnosis = noFix ?? healerOutput?.slice(0, 300) ?? 'No diagnosis available';
-          logger.warn({ taskId: task.id }, 'Healer could not fix task, notifying user');
+          const diagnosis =
+            noFix ?? healerOutput?.slice(0, 300) ?? 'No diagnosis available';
+          logger.warn(
+            { taskId: task.id },
+            'Healer could not fix task, notifying user',
+          );
           await deps.sendMessage(
             task.chat_jid,
             `Task *${task.id}* failed ${newFailures} times. I tried to diagnose and fix it automatically but couldn't.\n\n*Diagnosis:* ${diagnosis}`,
           );
-          updateTaskAfterRun(task.id, nextRun, `[Unresolved] ${diagnosis.slice(0, 200)}`);
+          updateTaskAfterRun(
+            task.id,
+            nextRun,
+            `[Unresolved] ${diagnosis.slice(0, 200)}`,
+          );
         }
       } else {
         // Healer already ran and still failing — give up until next scheduled window
-        logger.warn({ taskId: task.id, failures: newFailures }, 'Task still failing after heal attempt, notifying user');
+        logger.warn(
+          { taskId: task.id, failures: newFailures },
+          'Task still failing after heal attempt, notifying user',
+        );
         await deps.sendMessage(
           task.chat_jid,
           `Task *${task.id}* is still failing after an automatic fix attempt. Skipping until the next scheduled run.\n\nLast error: ${failureReason}`,
@@ -290,10 +322,21 @@ async function runTask(
         updateTaskAfterRun(task.id, nextRun, `[Gave up] ${resultSummary}`);
       }
     } else {
-      const delayMs = RETRY_DELAYS_MS[newFailures - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+      const delayMs =
+        RETRY_DELAYS_MS[newFailures - 1] ??
+        RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
       const retryAt = new Date(Date.now() + delayMs).toISOString();
-      logger.info({ taskId: task.id, failures: newFailures, retryAt }, 'Task failed, scheduling retry');
-      updateTaskAfterFailure(task.id, nextRun, resultSummary, retryAt, newFailures);
+      logger.info(
+        { taskId: task.id, failures: newFailures, retryAt },
+        'Task failed, scheduling retry',
+      );
+      updateTaskAfterFailure(
+        task.id,
+        nextRun,
+        resultSummary,
+        retryAt,
+        newFailures,
+      );
     }
   } else {
     const resultSummary = result ? result.slice(0, 200) : 'Completed';
@@ -368,7 +411,9 @@ When done, emit ONE of:
 Do not attempt to re-run the original task yourself. Just fix the environment so the next retry succeeds.`;
 
   const groups = deps.registeredGroups();
-  const group = Object.values(groups).find((g) => g.folder === task.group_folder);
+  const group = Object.values(groups).find(
+    (g) => g.folder === task.group_folder,
+  );
   if (!group) return null;
 
   let healerResult: string | null = null;

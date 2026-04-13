@@ -262,7 +262,9 @@ async function createBoTab(): Promise<{
 
     // Find the CDP target for this Chrome tab
     const targets = await listTargets();
-    const match = targets.find((t) => t.type === 'page' && t.url === 'about:blank');
+    const match = targets.find(
+      (t) => t.type === 'page' && t.url === 'about:blank',
+    );
     if (!match) {
       logger.warn('Could not find CDP target for background tab');
       // Fallback to /json/new
@@ -647,10 +649,7 @@ export function startHeliumApi(): http.Server {
         jsonResp(res, 200, { status: 'ok', id });
 
         // ── PATCH /tasks/:id ───────────────────────────────────────────
-      } else if (
-        method === 'PATCH' &&
-        url.pathname.startsWith('/tasks/')
-      ) {
+      } else if (method === 'PATCH' && url.pathname.startsWith('/tasks/')) {
         const { updateSuggestedTask } = await import('./db.js');
         const id = parseInt(url.pathname.split('/')[2], 10);
         let body = '';

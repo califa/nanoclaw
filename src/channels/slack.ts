@@ -183,13 +183,12 @@ export class SlackChannel implements Channel {
         if (Array.isArray(parsed) && parsed[0]?.type) {
           // Raw blocks array
           blocks = parsed;
-          fallbackText = parsed
-            .filter((b: { type: string }) => b.type === 'section')
-            .map(
-              (b: { text?: { text?: string } }) => b.text?.text || '',
-            )
-            .join('\n')
-            .slice(0, 200) || 'Daily briefing';
+          fallbackText =
+            parsed
+              .filter((b: { type: string }) => b.type === 'section')
+              .map((b: { text?: { text?: string } }) => b.text?.text || '')
+              .join('\n')
+              .slice(0, 200) || 'Daily briefing';
         } else if (parsed.blocks && Array.isArray(parsed.blocks)) {
           // {blocks: [...], text: "..."}
           blocks = parsed.blocks;

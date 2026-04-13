@@ -637,7 +637,16 @@ export function updateTaskAfterFailure(
         status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
     WHERE id = ?
   `,
-  ).run(nextRun, now, lastResult, consecutiveFailures, retryAt, healAttempted ? 1 : 0, nextRun, id);
+  ).run(
+    nextRun,
+    now,
+    lastResult,
+    consecutiveFailures,
+    retryAt,
+    healAttempted ? 1 : 0,
+    nextRun,
+    id,
+  );
 }
 
 export function getRecentTaskRunLogs(taskId: string, limit = 5): TaskRunLog[] {
@@ -703,9 +712,7 @@ export function createSuggestedTask(
   return result.lastInsertRowid as number;
 }
 
-export function getSuggestedTasks(
-  status?: string,
-): SuggestedTask[] {
+export function getSuggestedTasks(status?: string): SuggestedTask[] {
   if (status) {
     return db
       .prepare(
@@ -791,10 +798,7 @@ export function upsertMeetingBrief(
   );
 }
 
-export function getMeetingBriefs(
-  date?: string,
-  days?: number,
-): MeetingBrief[] {
+export function getMeetingBriefs(date?: string, days?: number): MeetingBrief[] {
   if (date) {
     return db
       .prepare(
