@@ -31,6 +31,30 @@ Here are the key findings from the research...
 
 Text inside `<internal>` tags is logged but not sent to the user. If you've already sent the key information via `send_message`, you can wrap the recap in `<internal>` to avoid sending it again.
 
+### Retry signal
+
+If a scheduled task partially fails and should be retried (e.g. a login failed, a service was unavailable, a browser step timed out), emit a `<retry>` tag with a short reason:
+
+```
+<retry>Figma login failed — SSO redirect didn't complete</retry>
+```
+
+The scheduler will automatically retry the task in 15 minutes, then 30 minutes on a second failure. After 3 failures it runs a healer agent to diagnose and fix the root cause before trying again. The `<retry>` tag is stripped before sending output to the user. Only use this for transient failures where a retry is likely to succeed — not for permanent errors or tasks that completed successfully.
+
+### Healer agent signals
+
+When you are invoked as a healer agent (the prompt will say "You are a self-healing agent"), diagnose the failure, attempt to fix it, and end with one of:
+
+```
+<healed>Brief description of what was broken and what you fixed</healed>
+```
+or
+```
+<no-fix>Brief diagnosis of what is broken and why it needs manual intervention</no-fix>
+```
+
+These tags are stripped before sending output to the user. After emitting `<healed>`, the scheduler will retry the original task automatically — do not re-run it yourself.
+
 ### Sub-agents and teammates
 
 When working as a sub-agent or teammate, only use `send_message` if instructed to by the main agent.
@@ -52,21 +76,24 @@ A local API runs at `http://host.docker.internal:9224/helium` to enforce this.
 
 ### Browsing with login sessions (mutations)
 
-Always pre-create a Bo tab before using agent-browser. This ensures agent-browser uses your tab (not the user's):
+Always pre-create a Bo tab before using agent-browser, and restore focus when done:
 
 ```bash
-# 1. Create a blank tab in the Bo group
+# 1. Create a blank tab in the Bo group (created in background, won't steal focus)
 TAB=$(curl -s -X POST http://host.docker.internal:9224/helium/create-tab)
 TAB_ID=$(echo $TAB | jq -r .cdpTargetId)
 
-# 2. Now use agent-browser — it will navigate your new Bo tab
+# 2. Use agent-browser — it will navigate your new Bo tab
 agent-browser --cdp http://host.docker.internal:9222 open https://example.com
 agent-browser --cdp http://host.docker.internal:9222 snapshot -i
 agent-browser --cdp http://host.docker.internal:9222 click @e1
 agent-browser --cdp http://host.docker.internal:9222 fill @e2 "text"
+
+# 3. When done with ALL browser work, restore user's focus
+curl -s -X POST http://host.docker.internal:9224/helium/restore-focus
 ```
 
-The blank tab you created becomes agent-browser's working tab. It stays in the Bo group throughout the session.
+**Important:** Call `restore-focus` once when you're completely done with browser work, not between every command. The Bo tab stays in the background throughout the session.
 
 ### Reading any tab (no mutation)
 

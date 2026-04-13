@@ -71,6 +71,9 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
   created_at: string;
+  consecutive_failures?: number;
+  retry_at?: string | null;
+  heal_attempted?: number;
 }
 
 export interface TaskRunLog {

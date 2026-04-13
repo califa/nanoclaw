@@ -84,6 +84,38 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(timestamp);
     CREATE INDEX IF NOT EXISTS idx_token_usage_group ON token_usage(group_folder);
 
+    CREATE TABLE IF NOT EXISTS suggested_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      source_detail TEXT,
+      task TEXT NOT NULL,
+      who_for TEXT,
+      priority TEXT NOT NULL DEFAULT 'medium',
+      suggested_actions TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_suggested_tasks_status ON suggested_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_suggested_tasks_created ON suggested_tasks(created_at);
+
+    CREATE TABLE IF NOT EXISTS meeting_briefs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      attendees TEXT,
+      brief TEXT,
+      open_items TEXT,
+      status TEXT NOT NULL DEFAULT 'upcoming',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_meeting_briefs_start ON meeting_briefs(start_time);
+    CREATE INDEX IF NOT EXISTS idx_meeting_briefs_status ON meeting_briefs(status);
+    CREATE INDEX IF NOT EXISTS idx_meeting_briefs_event ON meeting_briefs(event_id);
+
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -164,6 +196,27 @@ function createSchema(database: Database.Database): void {
     );
   } catch {
     /* columns already exist */
+  }
+
+  // Add self-heal columns for scheduled task retry tracking
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN consecutive_failures INTEGER DEFAULT 0`,
+    );
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN retry_at TEXT`);
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN heal_attempted INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* columns already exist */
+  }
+  // heal_attempted may be missing if consecutive_failures/retry_at were already added
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN heal_attempted INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
   }
 
   // Add reply context columns if they don't exist (migration for existing DBs)
@@ -538,11 +591,15 @@ export function getDueTasks(): ScheduledTask[] {
     .prepare(
       `
     SELECT * FROM scheduled_tasks
-    WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
-    ORDER BY next_run
+    WHERE status = 'active'
+      AND (
+        (next_run IS NOT NULL AND next_run <= ?)
+        OR (retry_at IS NOT NULL AND retry_at <= ?)
+      )
+    ORDER BY COALESCE(retry_at, next_run)
   `,
     )
-    .all(now) as ScheduledTask[];
+    .all(now, now) as ScheduledTask[];
 }
 
 export function updateTaskAfterRun(
@@ -554,10 +611,43 @@ export function updateTaskAfterRun(
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?,
+        consecutive_failures = 0, retry_at = NULL,
+        status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);
+}
+
+export function updateTaskAfterFailure(
+  id: string,
+  nextRun: string | null,
+  lastResult: string,
+  retryAt: string | null,
+  consecutiveFailures: number,
+  healAttempted?: boolean,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    UPDATE scheduled_tasks
+    SET next_run = ?, last_run = ?, last_result = ?,
+        consecutive_failures = ?, retry_at = ?,
+        heal_attempted = CASE WHEN ? THEN 1 ELSE heal_attempted END,
+        status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    WHERE id = ?
+  `,
+  ).run(nextRun, now, lastResult, consecutiveFailures, retryAt, healAttempted ? 1 : 0, nextRun, id);
+}
+
+export function getRecentTaskRunLogs(taskId: string, limit = 5): TaskRunLog[] {
+  return db
+    .prepare(
+      `SELECT task_id, run_at, duration_ms, status, result, error
+       FROM task_run_logs WHERE task_id = ?
+       ORDER BY run_at DESC LIMIT ?`,
+    )
+    .all(taskId, limit) as TaskRunLog[];
 }
 
 export function logTaskRun(log: TaskRunLog): void {
@@ -574,6 +664,158 @@ export function logTaskRun(log: TaskRunLog): void {
     log.result,
     log.error,
   );
+}
+
+// --- Suggested tasks ---
+
+export interface SuggestedTask {
+  id?: number;
+  source: string; // 'meeting', 'slack', 'email'
+  source_detail: string | null; // meeting title, slack channel, email subject
+  task: string;
+  who_for: string | null; // who the commitment was made to
+  priority: 'high' | 'medium' | 'low';
+  suggested_actions: string | null; // JSON array of action types
+  status: 'pending' | 'accepted' | 'dismissed' | 'done';
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export function createSuggestedTask(
+  task: Omit<SuggestedTask, 'id' | 'created_at' | 'resolved_at'>,
+): number {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO suggested_tasks (source, source_detail, task, who_for, priority, suggested_actions, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      task.source,
+      task.source_detail,
+      task.task,
+      task.who_for,
+      task.priority,
+      task.suggested_actions,
+      task.status,
+      now,
+    );
+  return result.lastInsertRowid as number;
+}
+
+export function getSuggestedTasks(
+  status?: string,
+): SuggestedTask[] {
+  if (status) {
+    return db
+      .prepare(
+        `SELECT * FROM suggested_tasks WHERE status = ? ORDER BY
+        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
+      )
+      .all(status) as SuggestedTask[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM suggested_tasks ORDER BY
+      CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
+    )
+    .all() as SuggestedTask[];
+}
+
+export function updateSuggestedTask(
+  id: number,
+  updates: Partial<Pick<SuggestedTask, 'status' | 'resolved_at'>>,
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.resolved_at !== undefined) {
+    fields.push('resolved_at = ?');
+    values.push(updates.resolved_at);
+  }
+  if (fields.length === 0) return;
+  values.push(id);
+  db.prepare(
+    `UPDATE suggested_tasks SET ${fields.join(', ')} WHERE id = ?`,
+  ).run(...values);
+}
+
+// --- Meeting briefs ---
+
+export interface MeetingBrief {
+  id?: number;
+  event_id: string;
+  title: string;
+  start_time: string;
+  end_time: string;
+  attendees: string | null; // JSON array of {name, email}
+  brief: string | null;
+  open_items: string | null; // JSON array of strings
+  status: 'upcoming' | 'completed' | 'cancelled';
+  created_at: string;
+  updated_at: string;
+}
+
+export function upsertMeetingBrief(
+  brief: Omit<MeetingBrief, 'id' | 'created_at' | 'updated_at'>,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    INSERT INTO meeting_briefs (event_id, title, start_time, end_time, attendees, brief, open_items, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(event_id) DO UPDATE SET
+      title = excluded.title,
+      start_time = excluded.start_time,
+      end_time = excluded.end_time,
+      attendees = excluded.attendees,
+      brief = excluded.brief,
+      open_items = excluded.open_items,
+      status = excluded.status,
+      updated_at = excluded.updated_at
+  `,
+  ).run(
+    brief.event_id,
+    brief.title,
+    brief.start_time,
+    brief.end_time,
+    brief.attendees,
+    brief.brief,
+    brief.open_items,
+    brief.status,
+    now,
+    now,
+  );
+}
+
+export function getMeetingBriefs(
+  date?: string,
+  days?: number,
+): MeetingBrief[] {
+  if (date) {
+    return db
+      .prepare(
+        `SELECT * FROM meeting_briefs WHERE date(start_time) = date(?) ORDER BY start_time`,
+      )
+      .all(date) as MeetingBrief[];
+  }
+  const lookAhead = days || 7;
+  return db
+    .prepare(
+      `SELECT * FROM meeting_briefs WHERE start_time >= datetime('now', '-1 day') AND start_time <= datetime('now', '+' || ? || ' days') ORDER BY start_time`,
+    )
+    .all(lookAhead) as MeetingBrief[];
+}
+
+export function getMeetingBriefByEventId(
+  eventId: string,
+): MeetingBrief | undefined {
+  return db
+    .prepare(`SELECT * FROM meeting_briefs WHERE event_id = ?`)
+    .get(eventId) as MeetingBrief | undefined;
 }
 
 // --- Token usage tracking ---

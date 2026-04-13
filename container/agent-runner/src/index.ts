@@ -722,7 +722,15 @@ async function main(): Promise<void> {
   // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+    const tz = process.env.TZ || 'UTC';
+    const currentDate = new Date().toLocaleDateString('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\nCurrent date: ${currentDate}\n\n${prompt}`;
   }
   const pending = drainIpcInput();
   if (pending.length > 0) {
@@ -749,7 +757,15 @@ async function main(): Promise<void> {
 
     // Script says wake agent — enrich prompt with script data
     log(`Script wakeAgent=true, enriching prompt with data`);
-    prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
+    const tz = process.env.TZ || 'UTC';
+    const currentDate = new Date().toLocaleDateString('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    prompt = `[SCHEDULED TASK]\n\nCurrent date: ${currentDate}\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
   }
 
   // Query loop: run query → wait for IPC message → run new query → repeat

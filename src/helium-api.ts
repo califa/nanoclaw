@@ -238,15 +238,51 @@ async function createBoTab(): Promise<{
   cdpTargetId: string;
   wsUrl: string;
 } | null> {
-  // Create blank tab via CDP HTTP API (requires PUT)
+  // Create blank tab in the Bo group's window (background, no focus steal)
   let newTarget: CdpTarget;
   try {
-    const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new`, {
-      method: 'PUT',
-    });
-    newTarget = (await res.json()) as CdpTarget;
+    // Find the window that contains the Bo tab group
+    const boGroupId = await getBoGroupId();
+    let windowId: number | null = null;
+    if (boGroupId !== null) {
+      windowId = await evalInExt<number | null>(
+        `chrome.tabs.query({groupId: ${boGroupId}}).then(tabs => tabs[0]?.windowId ?? null)`,
+      );
+    }
+    // Create the tab in that specific window (or fallback to default)
+    const createOpts = windowId
+      ? `{active: false, url: 'about:blank', windowId: ${windowId}}`
+      : `{active: false, url: 'about:blank'}`;
+    const chromeTabId = await evalInExt<number>(
+      `chrome.tabs.create(${createOpts}).then(t => t.id)`,
+    );
+
+    // Wait briefly for CDP to register the new tab
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Find the CDP target for this Chrome tab
+    const targets = await listTargets();
+    const match = targets.find((t) => t.type === 'page' && t.url === 'about:blank');
+    if (!match) {
+      logger.warn('Could not find CDP target for background tab');
+      // Fallback to /json/new
+      const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new`, {
+        method: 'PUT',
+      });
+      newTarget = (await res.json()) as CdpTarget;
+    } else {
+      newTarget = match;
+    }
   } catch {
-    return null;
+    // Fallback to /json/new
+    try {
+      const res = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new`, {
+        method: 'PUT',
+      });
+      newTarget = (await res.json()) as CdpTarget;
+    } catch {
+      return null;
+    }
   }
 
   // Wait briefly for the tab to initialize
@@ -261,12 +297,6 @@ async function createBoTab(): Promise<{
     );
   } else {
     await moveTabsToBoGroup([chromeId]);
-    // Deactivate the new tab so it doesn't steal focus from the user.
-    try {
-      await evalInExt<void>(`chrome.tabs.update(${chromeId}, {active: false})`);
-    } catch {
-      // Non-critical
-    }
   }
 
   return { cdpTargetId: newTarget.id, wsUrl: newTarget.webSocketDebuggerUrl };
@@ -503,6 +533,45 @@ export function startHeliumApi(): http.Server {
             title: t.title,
           })),
         });
+        // ── POST /helium/restore-focus ────────────────────────────────────
+        // Agent-browser activates tabs when connecting via CDP. Bo should call
+        // this after finishing browser work to give focus back to the user.
+      } else if (
+        method === 'POST' &&
+        url.pathname === '/helium/restore-focus'
+      ) {
+        try {
+          // Find the most recently active non-Bo tab
+          const boGroupId = await getBoGroupId();
+          const activeTab = await evalInExt<number | null>(
+            `chrome.tabs.query({active: true, lastFocusedWindow: true}).then(tabs => {
+              const t = tabs[0];
+              return t ? t.id : null;
+            })`,
+          );
+          if (activeTab !== null && boGroupId !== null) {
+            // Check if the active tab is a Bo tab — if so, find the user's last tab
+            const isBoTab = await evalInExt<boolean>(
+              `chrome.tabs.get(${activeTab}).then(t => t.groupId === ${boGroupId})`,
+            );
+            if (isBoTab) {
+              // Activate the most recent non-Bo tab
+              await evalInExt<void>(
+                `chrome.tabs.query({lastFocusedWindow: true}).then(tabs => {
+                  const nonBo = tabs.find(t => t.groupId !== ${boGroupId} && !t.active);
+                  if (nonBo) chrome.tabs.update(nonBo.id, {active: true});
+                })`,
+              );
+            }
+          }
+          jsonResp(res, 200, { status: 'ok' });
+        } catch (err) {
+          jsonResp(res, 200, {
+            status: 'ok',
+            note: 'best-effort',
+          });
+        }
+
         // ── GET /credentials ─────────────────────────────────────────────
       } else if (method === 'GET' && url.pathname === '/credentials') {
         const service = url.searchParams.get('service');
@@ -534,6 +603,70 @@ export function startHeliumApi(): http.Server {
         ).toISOString();
         const summary = getTokenUsageSummary(since);
         jsonResp(res, 200, { period, since, ...summary });
+
+        // ── GET /meetings ────────────────────────────────────────────────
+      } else if (method === 'GET' && url.pathname === '/meetings') {
+        const { getMeetingBriefs } = await import('./db.js');
+        const date = url.searchParams.get('date') || undefined;
+        const days = url.searchParams.get('days')
+          ? parseInt(url.searchParams.get('days')!, 10)
+          : undefined;
+        const briefs = getMeetingBriefs(date, days);
+        jsonResp(res, 200, {
+          date: date || `next ${days || 7} days`,
+          count: briefs.length,
+          meetings: briefs.map((b) => ({
+            ...b,
+            attendees: b.attendees ? JSON.parse(b.attendees) : [],
+            open_items: b.open_items ? JSON.parse(b.open_items) : [],
+          })),
+        });
+
+        // ── GET /tasks ────────────────────────────────────────────────────
+      } else if (method === 'GET' && url.pathname === '/tasks') {
+        const { getSuggestedTasks } = await import('./db.js');
+        const status = url.searchParams.get('status') || undefined;
+        const tasks = getSuggestedTasks(status);
+        jsonResp(res, 200, {
+          count: tasks.length,
+          tasks: tasks.map((t) => ({
+            ...t,
+            suggested_actions: t.suggested_actions
+              ? JSON.parse(t.suggested_actions)
+              : [],
+          })),
+        });
+
+        // ── POST /tasks ────────────────────────────────────────────────
+      } else if (method === 'POST' && url.pathname === '/tasks') {
+        const { createSuggestedTask } = await import('./db.js');
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const data = JSON.parse(body);
+        const id = createSuggestedTask(data);
+        jsonResp(res, 200, { status: 'ok', id });
+
+        // ── PATCH /tasks/:id ───────────────────────────────────────────
+      } else if (
+        method === 'PATCH' &&
+        url.pathname.startsWith('/tasks/')
+      ) {
+        const { updateSuggestedTask } = await import('./db.js');
+        const id = parseInt(url.pathname.split('/')[2], 10);
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const updates = JSON.parse(body);
+        updateSuggestedTask(id, updates);
+        jsonResp(res, 200, { status: 'ok', id });
+
+        // ── POST /meetings ───────────────────────────────────────────────
+      } else if (method === 'POST' && url.pathname === '/meetings') {
+        const { upsertMeetingBrief } = await import('./db.js');
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const data = JSON.parse(body);
+        upsertMeetingBrief(data);
+        jsonResp(res, 200, { status: 'ok', event_id: data.event_id });
       } else {
         jsonResp(res, 404, { error: 'Not found' });
       }

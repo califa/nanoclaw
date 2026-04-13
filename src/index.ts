@@ -313,8 +313,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // If a per-chat allowlist entry exists and the sender isn't in it, drop silently.
   {
     const allowlistCfg = loadSenderAllowlist();
-    const chatEntry =
-      allowlistCfg.chats[chatJid] ?? allowlistCfg.default;
+    const chatEntry = allowlistCfg.chats[chatJid] ?? allowlistCfg.default;
     if (chatEntry.allow !== '*') {
       const filtered = missedMessages.filter(
         (m) => m.is_from_me || (chatEntry.allow as string[]).includes(m.sender),
@@ -878,6 +877,7 @@ async function main(): Promise<void> {
     },
   });
   syncOAuthCredentials();
+  setInterval(syncOAuthCredentials, 45 * 60 * 1000); // refresh every 45 min (token TTL ~1h)
   startHeliumApi();
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);

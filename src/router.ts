@@ -33,7 +33,12 @@ export function formatMessages(
 }
 
 export function stripInternalTags(text: string): string {
-  return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+  return text
+    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+    .replace(/<retry>[\s\S]*?<\/retry>/g, '')
+    .replace(/<healed>[\s\S]*?<\/healed>/g, '')
+    .replace(/<no-fix>[\s\S]*?<\/no-fix>/g, '')
+    .trim();
 }
 
 export function formatOutbound(rawText: string, channel?: ChannelType): string {

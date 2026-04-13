@@ -11,9 +11,11 @@ import {
 import {
   getAllTasks,
   getDueTasks,
+  getRecentTaskRunLogs,
   getTaskById,
   logTaskRun,
   updateTask,
+  updateTaskAfterFailure,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -194,6 +196,7 @@ async function runTask(
         }
         if (streamedOutput.status === 'success') {
           // Log token usage if available
+          // Log token usage if available
           if (streamedOutput.usage) {
             deps.logUsage?.({
               group_folder: task.group_folder,
@@ -231,6 +234,8 @@ async function runTask(
   }
 
   const durationMs = Date.now() - startTime;
+  const retrySignal = parseRetrySignal(result);
+  const failed = !!error || !!retrySignal;
 
   logTaskRun({
     task_id: task.id,
@@ -238,16 +243,161 @@ async function runTask(
     duration_ms: durationMs,
     status: error ? 'error' : 'success',
     result,
-    error,
+    error: error ?? retrySignal ?? null,
   });
 
   const nextRun = computeNextRun(task);
-  const resultSummary = error
-    ? `Error: ${error}`
-    : result
-      ? result.slice(0, 200)
-      : 'Completed';
-  updateTaskAfterRun(task.id, nextRun, resultSummary);
+
+  if (failed) {
+    const newFailures = (task.consecutive_failures ?? 0) + 1;
+    const failureReason = error
+      ? `Error: ${error.slice(0, 150)}`
+      : `Retry requested: ${retrySignal}`;
+    const resultSummary = `[Failure ${newFailures}] ${failureReason}`;
+
+    if (newFailures >= MAX_RETRIES) {
+      if (!task.heal_attempted) {
+        // Run the healer before giving up
+        logger.info({ taskId: task.id, failures: newFailures }, 'Task hit retry limit, running healer');
+        updateTaskAfterFailure(task.id, nextRun, resultSummary, null, newFailures, true);
+
+        const healerOutput = await runHealerTask(task, deps);
+        const healed = parseHealedSignal(healerOutput);
+        const noFix = parseNoFixSignal(healerOutput);
+
+        if (healed) {
+          // Healer fixed it — schedule a retry soon and reset failure count
+          const retryAt = new Date(Date.now() + HEAL_RETRY_DELAY_MS).toISOString();
+          logger.info({ taskId: task.id, fix: healed }, 'Healer succeeded, scheduling retry');
+          updateTaskAfterFailure(task.id, nextRun, `[Healed] ${healed.slice(0, 200)}`, retryAt, 0);
+        } else {
+          // Healer couldn't fix it — notify user with diagnosis
+          const diagnosis = noFix ?? healerOutput?.slice(0, 300) ?? 'No diagnosis available';
+          logger.warn({ taskId: task.id }, 'Healer could not fix task, notifying user');
+          await deps.sendMessage(
+            task.chat_jid,
+            `Task *${task.id}* failed ${newFailures} times. I tried to diagnose and fix it automatically but couldn't.\n\n*Diagnosis:* ${diagnosis}`,
+          );
+          updateTaskAfterRun(task.id, nextRun, `[Unresolved] ${diagnosis.slice(0, 200)}`);
+        }
+      } else {
+        // Healer already ran and still failing — give up until next scheduled window
+        logger.warn({ taskId: task.id, failures: newFailures }, 'Task still failing after heal attempt, notifying user');
+        await deps.sendMessage(
+          task.chat_jid,
+          `Task *${task.id}* is still failing after an automatic fix attempt. Skipping until the next scheduled run.\n\nLast error: ${failureReason}`,
+        );
+        updateTaskAfterRun(task.id, nextRun, `[Gave up] ${resultSummary}`);
+      }
+    } else {
+      const delayMs = RETRY_DELAYS_MS[newFailures - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+      const retryAt = new Date(Date.now() + delayMs).toISOString();
+      logger.info({ taskId: task.id, failures: newFailures, retryAt }, 'Task failed, scheduling retry');
+      updateTaskAfterFailure(task.id, nextRun, resultSummary, retryAt, newFailures);
+    }
+  } else {
+    const resultSummary = result ? result.slice(0, 200) : 'Completed';
+    updateTaskAfterRun(task.id, nextRun, resultSummary);
+  }
+}
+
+const MAX_RETRIES = 3; // failures before healer runs
+const RETRY_DELAYS_MS = [15 * 60 * 1000, 30 * 60 * 1000]; // 15 min, 30 min before heal attempt
+const HEAL_RETRY_DELAY_MS = 5 * 60 * 1000; // 5 min after a successful heal
+
+/** Parse a <retry>reason</retry> signal from agent output. Returns reason or null. */
+function parseRetrySignal(text: string | null): string | null {
+  if (!text) return null;
+  const match = text.match(/<retry>([\s\S]*?)<\/retry>/);
+  return match ? match[1].trim() : null;
+}
+
+/** Parse a <healed>description</healed> signal. Returns description or null. */
+function parseHealedSignal(text: string | null): string | null {
+  if (!text) return null;
+  const match = text.match(/<healed>([\s\S]*?)<\/healed>/);
+  return match ? match[1].trim() : null;
+}
+
+/** Parse a <no-fix>diagnosis</no-fix> signal. Returns diagnosis or null. */
+function parseNoFixSignal(text: string | null): string | null {
+  if (!text) return null;
+  const match = text.match(/<no-fix>([\s\S]*?)<\/no-fix>/);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Run a healer agent for a repeatedly-failing task.
+ * The healer gets the error history and attempts to diagnose and fix the root cause.
+ * Returns the healer's output text, or null if the healer itself crashed.
+ */
+async function runHealerTask(
+  task: ScheduledTask,
+  deps: SchedulerDependencies,
+): Promise<string | null> {
+  const logs = getRecentTaskRunLogs(task.id, 5);
+  const errorSummary = logs
+    .map(
+      (l, i) =>
+        `Run ${i + 1} (${l.run_at}): status=${l.status}` +
+        (l.error ? `, error=${l.error.slice(0, 300)}` : '') +
+        (l.result ? `, result=${l.result.slice(0, 200)}` : ''),
+    )
+    .join('\n');
+
+  const healPrompt = `You are a self-healing agent. The scheduled task "${task.id}" has failed ${task.consecutive_failures ?? 0} times in a row.
+
+## Failing task prompt (summarised)
+${task.prompt.slice(0, 800)}${task.prompt.length > 800 ? '\n...(truncated)' : ''}
+
+## Recent failure history
+${errorSummary}
+
+## Your job
+1. Diagnose the root cause of the failures from the error history above.
+2. Investigate the system to confirm your diagnosis (check logs, test commands, inspect config, etc.).
+3. Attempt to fix the underlying issue.
+4. Test that your fix works.
+
+When done, emit ONE of:
+- <healed>Brief description of what was broken and what you fixed</healed>
+  Use this if you successfully fixed the root cause.
+- <no-fix>Brief diagnosis of what is broken and why you couldn't fix it automatically</no-fix>
+  Use this if the issue requires manual intervention.
+
+Do not attempt to re-run the original task yourself. Just fix the environment so the next retry succeeds.`;
+
+  const groups = deps.registeredGroups();
+  const group = Object.values(groups).find((g) => g.folder === task.group_folder);
+  if (!group) return null;
+
+  let healerResult: string | null = null;
+
+  try {
+    const output = await runContainerAgent(
+      group,
+      {
+        prompt: healPrompt,
+        groupFolder: task.group_folder,
+        chatJid: task.chat_jid,
+        isMain: group.isMain === true,
+        isScheduledTask: true,
+        assistantName: ASSISTANT_NAME,
+      },
+      (proc, containerName) =>
+        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+      async (streamedOutput: ContainerOutput) => {
+        if (streamedOutput.result) {
+          healerResult = streamedOutput.result;
+        }
+      },
+    );
+    if (output.result) healerResult = output.result;
+  } catch (err) {
+    logger.error({ taskId: task.id, err }, 'Healer container failed');
+  }
+
+  return healerResult;
 }
 
 let schedulerRunning = false;

@@ -174,8 +174,38 @@ export class SlackChannel implements Channel {
     }
 
     try {
-      // Slack limits messages to ~4000 characters; split if needed
-      if (text.length <= MAX_MESSAGE_LENGTH) {
+      // Check if the message is Block Kit JSON (starts with [{ or {"blocks":)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let blocks: any[] | undefined;
+      let fallbackText = text;
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed) && parsed[0]?.type) {
+          // Raw blocks array
+          blocks = parsed;
+          fallbackText = parsed
+            .filter((b: { type: string }) => b.type === 'section')
+            .map(
+              (b: { text?: { text?: string } }) => b.text?.text || '',
+            )
+            .join('\n')
+            .slice(0, 200) || 'Daily briefing';
+        } else if (parsed.blocks && Array.isArray(parsed.blocks)) {
+          // {blocks: [...], text: "..."}
+          blocks = parsed.blocks;
+          fallbackText = parsed.text || fallbackText;
+        }
+      } catch {
+        // Not JSON — plain text, send as-is
+      }
+
+      if (blocks) {
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          text: fallbackText,
+          blocks,
+        });
+      } else if (text.length <= MAX_MESSAGE_LENGTH) {
         await this.app.client.chat.postMessage({ channel: channelId, text });
       } else {
         for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
@@ -209,7 +239,7 @@ export class SlackChannel implements Channel {
   }
 
   // Slack has no native typing indicator for bots.
-  // Instead, add/remove a ⏳ reaction on the triggering user message.
+  // Instead, add/remove a 👀 reaction on the triggering user message.
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
     const ts = this.lastUserMessageTs.get(jid);
@@ -219,13 +249,13 @@ export class SlackChannel implements Channel {
         await this.app.client.reactions.add({
           channel: channelId,
           timestamp: ts,
-          name: 'hourglass_flowing_sand',
+          name: 'eyes',
         });
       } else {
         await this.app.client.reactions.remove({
           channel: channelId,
           timestamp: ts,
-          name: 'hourglass_flowing_sand',
+          name: 'eyes',
         });
       }
     } catch {
