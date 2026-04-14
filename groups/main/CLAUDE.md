@@ -74,6 +74,8 @@ The user runs Helium (a Chromium-based browser) with remote debugging enabled on
 
 A local API runs at `http://host.docker.internal:9224/helium` to enforce this.
 
+**Always use `--cdp http://host.docker.internal:9224/cdp`** — never use port 9222 directly. The port 9224 proxy rewrites the Host header so Chrome accepts the connection. Using 9222 directly will fail with a Host header rejection.
+
 ### Browsing with login sessions (mutations)
 
 Always pre-create a Bo tab before using agent-browser, and restore focus when done:
@@ -83,11 +85,11 @@ Always pre-create a Bo tab before using agent-browser, and restore focus when do
 TAB=$(curl -s -X POST http://host.docker.internal:9224/helium/create-tab)
 TAB_ID=$(echo $TAB | jq -r .cdpTargetId)
 
-# 2. Use agent-browser — it will navigate your new Bo tab
-agent-browser --cdp http://host.docker.internal:9222 open https://example.com
-agent-browser --cdp http://host.docker.internal:9222 snapshot -i
-agent-browser --cdp http://host.docker.internal:9222 click @e1
-agent-browser --cdp http://host.docker.internal:9222 fill @e2 "text"
+# 2. Use agent-browser — always via the CDP proxy, never port 9222 directly
+agent-browser --cdp http://host.docker.internal:9224/cdp open https://example.com
+agent-browser --cdp http://host.docker.internal:9224/cdp snapshot -i
+agent-browser --cdp http://host.docker.internal:9224/cdp click @e1
+agent-browser --cdp http://host.docker.internal:9224/cdp fill @e2 "text"
 
 # 3. When done with ALL browser work, restore user's focus
 curl -s -X POST http://host.docker.internal:9224/helium/restore-focus
@@ -129,7 +131,7 @@ Restart it via IPC, then retry:
 echo '{"type":"restart_helium"}' > /workspace/ipc/tasks/restart_helium_$(date +%s).json
 ```
 
-Wait 4 seconds, then check: `curl -s http://host.docker.internal:9222/json | jq length`. If it returns a number, Helium is up.
+Wait 4 seconds, then check: `curl -s http://host.docker.internal:9224/cdp/json | jq length`. If it returns a number, Helium is up.
 
 If still failing after 8 seconds, tell the user to relaunch manually with `open -a Helium --args --remote-debugging-port=9222`.
 

@@ -15,6 +15,7 @@
  */
 
 import http from 'http';
+import net from 'net';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -407,8 +408,51 @@ export function startHeliumApi(): http.Server {
     const method = req.method ?? 'GET';
 
     try {
-      // ── GET /helium/tabs ─────────────────────────────────────────────────
-      if (method === 'GET' && url.pathname === '/helium/tabs') {
+      // ── GET /cdp/json[/*] ─────────────────────────────────────────────────
+      // CDP proxy: forwards Chrome's /json endpoints to containers, rewriting
+      // webSocketDebuggerUrl so they point back through this proxy instead of
+      // directly to Chrome (which rejects non-localhost Host headers).
+      if (method === 'GET' && url.pathname.startsWith('/cdp/json')) {
+        const chromePath = url.pathname.replace('/cdp', '');
+        const chromeRes = await fetch(
+          `http://${CDP_HOST}:${CDP_PORT}${chromePath}`,
+        );
+        if (!chromeRes.ok) {
+          jsonResp(res, chromeRes.status, { error: 'Chrome CDP error' });
+          return;
+        }
+        const raw = await chromeRes.text();
+        const rewritten = raw.replace(
+          /ws:\/\/localhost:9222\/devtools\//g,
+          `ws://host.docker.internal:${HELIUM_API_PORT}/cdp/devtools/`,
+        );
+        res.writeHead(chromeRes.status, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(rewritten);
+        return;
+
+        // ── PUT /cdp/json/new ────────────────────────────────────────────────
+      } else if (method === 'PUT' && url.pathname === '/cdp/json/new') {
+        const chromeRes = await fetch(
+          `http://${CDP_HOST}:${CDP_PORT}/json/new`,
+          { method: 'PUT' },
+        );
+        const raw = await chromeRes.text();
+        const rewritten = raw.replace(
+          /ws:\/\/localhost:9222\/devtools\//g,
+          `ws://host.docker.internal:${HELIUM_API_PORT}/cdp/devtools/`,
+        );
+        res.writeHead(chromeRes.status, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(rewritten);
+        return;
+
+        // ── GET /helium/tabs ─────────────────────────────────────────────────
+      } else if (method === 'GET' && url.pathname === '/helium/tabs') {
         const targets = (await listTargets()).filter((t) => t.type === 'page');
         jsonResp(res, 200, {
           tabs: targets.map((t) => ({ id: t.id, title: t.title, url: t.url })),
@@ -677,6 +721,37 @@ export function startHeliumApi(): http.Server {
         hint: 'Is Helium running with --remote-debugging-port=9222?',
       });
     }
+  });
+
+  // ── WebSocket proxy for /cdp/devtools/* ────────────────────────────────
+  // Containers connect to ws://host.docker.internal:9224/cdp/devtools/page/<id>
+  // and we pipe that to ws://localhost:9222/devtools/page/<id>, rewriting the
+  // Host header so Chrome accepts the connection.
+  server.on('upgrade', (req, socket, head) => {
+    if (!req.url?.startsWith('/cdp/devtools/')) {
+      socket.destroy();
+      return;
+    }
+    const targetPath = req.url.replace('/cdp', '');
+    const upstream = net.connect(CDP_PORT, CDP_HOST, () => {
+      // Forward the upgrade request with Host: localhost so Chrome accepts it
+      const headers = [
+        `GET ${targetPath} HTTP/1.1`,
+        `Host: localhost`,
+        `Upgrade: websocket`,
+        `Connection: Upgrade`,
+        `Sec-WebSocket-Key: ${req.headers['sec-websocket-key'] ?? 'dGhlIHNhbXBsZSBub25jZQ=='}`,
+        `Sec-WebSocket-Version: ${req.headers['sec-websocket-version'] ?? '13'}`,
+        '',
+        '',
+      ].join('\r\n');
+      upstream.write(headers);
+      if (head.length) upstream.write(head);
+    });
+    upstream.on('error', () => socket.destroy());
+    socket.on('error', () => upstream.destroy());
+    upstream.pipe(socket);
+    socket.pipe(upstream);
   });
 
   server.listen(HELIUM_API_PORT, '0.0.0.0', () => {
