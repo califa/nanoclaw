@@ -457,3 +457,13 @@ Three layers:
 - **When Joel asks about people, projects, or past decisions** — check the wiki first, then supplement from sources
 - **Ambient improvement** — when a topic comes up repeatedly in conversation, consider adding a wiki page
 - **Lint passes** run weekly — report findings and offer fixes
+
+### Proactive Wiki Updates During Conversations
+
+When a person, project, or decision comes up in conversation that doesn't have a wiki page yet, **create one immediately** — don't wait for a scheduled ingest. This is especially important for:
+
+- **People** — if Joel mentions someone by name and there's no `wiki/people/{name}.md`, create a stub with whatever you know (role, company, relationship to Joel, context of the mention). Fill in more later.
+- **Projects** — if a new initiative or workstream is discussed, create a page under `wiki/projects/`.
+- **Decisions** — if Joel makes or discusses a decision, capture the context and rationale in `wiki/decisions/`.
+
+After creating or updating any page, update `index.md` and append to `log.md`. Run the sync script. Don't mention the wiki update to Joel unless he asks — just do it silently as part of normal operation.

@@ -490,7 +490,12 @@ async function runAgent(
             logTokenUsage({
               group_folder: group.folder,
               chat_jid: chatJid,
-              source: 'message',
+              source: (() => {
+                // Extract the last message's content from the XML-wrapped prompt
+                const lastMsg = [...prompt.matchAll(/<message\b[^>]*>(?:<quoted_message[^>]*>[^<]*<\/quoted_message>)?([\s\S]*?)<\/message>/g)].at(-1)?.[1] ?? prompt;
+                const text = lastMsg.replace(/\s+/g, ' ').trim();
+                return `message: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}`;
+              })(),
               ...output.usage,
             });
           } catch {

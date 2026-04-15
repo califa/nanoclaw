@@ -158,6 +158,10 @@ async function runTask(
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
+  // Tasks run under a synthetic queue JID so they don't block the conversational
+  // channel while a long task (e.g. wiki ingest) is in progress.
+  const taskQueueJid = `task:${task.id}`;
+
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
   // query loop to time out. A short delay handles any final MCP calls.
@@ -168,7 +172,7 @@ async function runTask(
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
       logger.debug({ taskId: task.id }, 'Closing task container after result');
-      deps.queue.closeStdin(task.chat_jid);
+      deps.queue.closeStdin(taskQueueJid);
     }, TASK_CLOSE_DELAY_MS);
   };
 
@@ -186,7 +190,7 @@ async function runTask(
         script: task.script || undefined,
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        deps.onProcess(taskQueueJid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
@@ -196,7 +200,6 @@ async function runTask(
         }
         if (streamedOutput.status === 'success') {
           // Log token usage if available
-          // Log token usage if available
           if (streamedOutput.usage) {
             deps.logUsage?.({
               group_folder: task.group_folder,
@@ -205,7 +208,7 @@ async function runTask(
               ...streamedOutput.usage,
             });
           }
-          deps.queue.notifyIdle(task.chat_jid);
+          deps.queue.notifyIdle(taskQueueJid);
           scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }
         if (streamedOutput.status === 'error') {
@@ -430,7 +433,7 @@ Do not attempt to re-run the original task yourself. Just fix the environment so
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        deps.onProcess(`task:healer:${task.id}`, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           healerResult = streamedOutput.result;
@@ -469,7 +472,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
-        deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
+        deps.queue.enqueueTask(`task:${currentTask.id}`, currentTask.id, () =>
           runTask(currentTask, deps),
         );
       }
