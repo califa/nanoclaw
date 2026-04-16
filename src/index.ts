@@ -86,7 +86,49 @@ let messageLoopRunning = false;
  * The keychain stores the full-scope token (including user:mcp_servers) which
  * enables cloud MCP connectors inside containers.
  */
-function syncOAuthCredentials(): void {
+const CLAUDE_OAUTH_CLIENT_ID = '22422756-60c9-4084-8eb7-27705fd5cf9a';
+const CLAUDE_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+const OAUTH_REFRESH_THRESHOLD_MS = 15 * 60 * 1000; // refresh if <15 min remaining
+
+async function refreshOAuthToken(
+  refreshToken: string,
+  scopes: string[],
+): Promise<{ accessToken: string; refreshToken: string; expiresAt: number } | null> {
+  try {
+    const body = JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: CLAUDE_OAUTH_CLIENT_ID,
+      scope: scopes.join(' '),
+    });
+    const res = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status }, 'OAuth token refresh request failed');
+      return null;
+    }
+    const json = (await res.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    const expiresAt = Date.now() + (json.expires_in ?? 3600) * 1000;
+    return {
+      accessToken: json.access_token,
+      refreshToken: json.refresh_token ?? refreshToken,
+      expiresAt,
+    };
+  } catch (err) {
+    logger.warn({ err }, 'OAuth token refresh failed');
+    return null;
+  }
+}
+
+async function syncOAuthCredentials(): Promise<void> {
   const destDir = path.join(os.homedir(), '.config', 'nanoclaw');
   const destFile = path.join(destDir, 'claude-oauth.json');
   try {
@@ -96,43 +138,70 @@ function syncOAuthCredentials(): void {
       'Claude Code-credentials',
       '-w',
     ]).toString();
-    const data = JSON.parse(raw);
-    const oauth = data?.claudeAiOauth;
-    if (oauth?.accessToken && oauth?.refreshToken && oauth?.scopes) {
-      fs.mkdirSync(destDir, { recursive: true });
-      // Save the full keychain structure — the SDK reads .credentials.json
-      // and expects the same format as the keychain entry.
-      fs.writeFileSync(destFile, JSON.stringify(data));
-      logger.info('OAuth credentials synced from keychain');
+    let data = JSON.parse(raw);
+    let oauth = data?.claudeAiOauth;
+    if (!oauth?.accessToken || !oauth?.refreshToken || !oauth?.scopes) return;
 
-      // Also update OneCLI's stored Anthropic credential with the fresh
-      // keychain token. The keychain token is short-lived (~1h) and OneCLI's
-      // proxy replaces auth headers with its stored value, so it must stay
-      // in sync to avoid 401s.
-      // Find the Anthropic secret in OneCLI and update it with the fresh token
-      try {
-        const secretsRaw = execFileSync('onecli', [
-          'secrets',
-          'list',
-        ]).toString();
-        const secrets = JSON.parse(secretsRaw);
-        const anthropicSecret = secrets?.data?.find(
-          (s: { type: string }) => s.type === 'anthropic',
-        );
-        if (anthropicSecret?.id) {
-          execFileSync('onecli', [
-            'secrets',
-            'update',
-            '--id',
-            anthropicSecret.id,
-            '--value',
-            oauth.accessToken,
+    // Proactively refresh if token expires within the threshold
+    const expiresAt: number = oauth.expiresAt ?? 0;
+    const msUntilExpiry = expiresAt - Date.now();
+    if (msUntilExpiry < OAUTH_REFRESH_THRESHOLD_MS) {
+      logger.info(
+        { msUntilExpiry: Math.round(msUntilExpiry / 1000) + 's' },
+        'OAuth token expiring soon — refreshing',
+      );
+      const refreshed = await refreshOAuthToken(oauth.refreshToken, oauth.scopes);
+      if (refreshed) {
+        // Merge new tokens into the data structure and write back to keychain
+        oauth = {
+          ...oauth,
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          expiresAt: refreshed.expiresAt,
+        };
+        data = { ...data, claudeAiOauth: oauth };
+        // Update macOS keychain so Claude desktop app stays in sync
+        try {
+          execFileSync('security', [
+            'add-generic-password',
+            '-U', // update if exists
+            '-s', 'Claude Code-credentials',
+            '-a', os.userInfo().username,
+            '-w', JSON.stringify(data),
           ]);
-          logger.info('OneCLI Anthropic credential refreshed from keychain');
+          logger.info('OAuth token refreshed and keychain updated');
+        } catch {
+          logger.debug('Keychain write failed (non-critical)');
         }
-      } catch {
-        logger.debug('OneCLI credential refresh failed (non-critical)');
+      } else {
+        logger.warn('OAuth refresh failed — continuing with existing token');
       }
+    }
+
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(destFile, JSON.stringify(data));
+    logger.info('OAuth credentials synced from keychain');
+
+    // Keep OneCLI's stored Anthropic credential in sync
+    try {
+      const secretsRaw = execFileSync('onecli', ['secrets', 'list']).toString();
+      const secrets = JSON.parse(secretsRaw);
+      const anthropicSecret = secrets?.data?.find(
+        (s: { type: string }) => s.type === 'anthropic',
+      );
+      if (anthropicSecret?.id) {
+        execFileSync('onecli', [
+          'secrets',
+          'update',
+          '--id',
+          anthropicSecret.id,
+          '--value',
+          oauth.accessToken,
+        ]);
+        logger.info('OneCLI Anthropic credential refreshed from keychain');
+      }
+    } catch {
+      logger.debug('OneCLI credential refresh failed (non-critical)');
     }
   } catch {
     if (fs.existsSync(destFile)) {
@@ -492,7 +561,12 @@ async function runAgent(
               chat_jid: chatJid,
               source: (() => {
                 // Extract the last message's content from the XML-wrapped prompt
-                const lastMsg = [...prompt.matchAll(/<message\b[^>]*>(?:<quoted_message[^>]*>[^<]*<\/quoted_message>)?([\s\S]*?)<\/message>/g)].at(-1)?.[1] ?? prompt;
+                const lastMsg =
+                  [
+                    ...prompt.matchAll(
+                      /<message\b[^>]*>(?:<quoted_message[^>]*>[^<]*<\/quoted_message>)?([\s\S]*?)<\/message>/g,
+                    ),
+                  ].at(-1)?.[1] ?? prompt;
                 const text = lastMsg.replace(/\s+/g, ' ').trim();
                 return `message: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}`;
               })(),
@@ -881,8 +955,16 @@ async function main(): Promise<void> {
       }
     },
   });
-  syncOAuthCredentials();
-  setInterval(syncOAuthCredentials, 45 * 60 * 1000); // refresh every 45 min (token TTL ~1h)
+  syncOAuthCredentials().catch((err) =>
+    logger.warn({ err }, 'Initial OAuth sync failed'),
+  );
+  setInterval(
+    () =>
+      syncOAuthCredentials().catch((err) =>
+        logger.warn({ err }, 'Periodic OAuth sync failed'),
+      ),
+    45 * 60 * 1000,
+  ); // refresh every 45 min — proactively refreshes token if <15 min until expiry
   startHeliumApi();
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
