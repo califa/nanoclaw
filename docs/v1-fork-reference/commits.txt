@@ -1,0 +1,225 @@
+8a65122 docs: redirect migration guide to canonical migrate-v2.sh path
+dae9254 chore: save v1→v2 migration guide
+09dfc1e docs: expand global Bo guidance + prettier cleanup
+cbf2e16 feat: cross-channel adversarial pre-send reviewer
+ee25101 fix: OAuth refresher tries direct HTTP first, falls back to claude CLI
+35e387f feat: also load container skills from ~/skills/skills
+0c675c8 feat: main group containers also load global CLAUDE.md
+afcbaa8 feat: obsidian-bridge HTTP proxy for container access to host CLI
+f163c4f feat: expose /credentials/list endpoint to enumerate available services
+20deed6 fix: read OAuth credentials from ~/.claude/.credentials.json instead of keychain
+942457f fix: correct OAuth token refresh — remove --bare flag that disabled it
+48e4880 fix: proactively refresh OAuth token before expiry
+078d041 feat: decouple task queue from conversation channel + quality-of-life improvements
+20df556 fix: add CDP proxy to bypass Chrome Host header restriction
+103e41f style: apply prettier formatting
+b034390 feat: self-healing scheduler, OAuth refresh, and UX improvements
+69ff8fc feat: add Slack channel with typing indicator and sender allowlist
+59cf1f0 feat: token usage tracking, 1Password credentials, and tab focus fix
+ce1aadc Merge remote-tracking branch 'slack/main'
+ac2237f feat: add LLM Wiki system with container skill and Bo instructions
+2a74d89 fix: look up OneCLI Anthropic secret ID dynamically instead of hardcoding
+5b49711 chore: n8n integration, self-improvement logging, and formatting fixes
+ae5d650 fix: improve HA shortcut entity matching and auto-refresh OneCLI credential
+0f6e4ab feat: optimize HA response times with shortcuts and pre-installed MCPs
+18c2393 feat: add Home Assistant MCP for smart home control
+0498333 Revert "feat: lazy-load cloud MCP connectors based on message keywords"
+379a2ba feat: lazy-load cloud MCP connectors based on message keywords
+de08e89 feat: enable cloud MCP connectors (Notion, Slack, Calendar, etc.) in containers
+cf982fb Merge remote-tracking branch 'whatsapp/skill/local-whisper'
+60a6545 chore: update lockfile after voice-transcription merge
+8ea06a2 Merge remote-tracking branch 'whatsapp/skill/voice-transcription'
+4bd3dec feat: pass CLAUDE_CODE_OAUTH_TOKEN to containers for cloud connector access
+6ada9b3 fix: define __dirname at module level in agent-runner
+70211aa Merge remote-tracking branch 'upstream/skill/channel-formatting'
+187ec11 fix: move __dirname definition before Ollama MCP config in agent-runner
+ce42419 feat: add Helium browser integration and channel/build fixes
+606bfb3 feat: add Ollama MCP tool integration
+b7f7e74 feat: add Gmail channel skill
+a716db5 chore: update package files after WhatsApp merge
+d1d3a9c feat: add WhatsApp channel skill
+132c848 Merge remote-tracking branch 'telegram/main'
+7c9ea8f Merge remote-tracking branch 'upstream/main' into sync-gmail
+812c844 Merge remote-tracking branch 'upstream/main' into sync-wa
+fbfd4cb merge: catch up with upstream nanoclaw main
+1d51678 Merge remote-tracking branch 'upstream/main' into telegram-sync
+63acd06 Merge pull request #141 from qwibitai/pr139-reply-context
+86a1925 fix: persist reply context to DB and add tests
+99d7e87 Merge branch 'main' of https://github.com/leonalfredbot-ship-it/nanoclaw-telegram into pr139-reply-context
+869171e Merge branch 'feat/file-download' of https://github.com/cschmidt/nanoclaw-telegram into telegram-main-merge
+062ce02 feat: pass Telegram reply/quoted message context to agent
+073f98b feat: pass Telegram reply/quoted message context to agent
+dee4ec1 feat: pass Telegram reply/quoted message context to agent
+3618945 Merge pull request #89 from qwibitai/fix/whatsapp-auth-proto-cjs
+a0bf89d fix: import proto via createRequire (not ESM named export)
+42b3117 Merge pull request #88 from qwibitai/fix/whatsapp-auth-platform-id
+1bd8f06 fix: move getPlatformId patch to whatsapp-auth.ts
+876e29b Merge pull request #87 from qwibitai/fix/baileys-platform-id
+c0863cc fix: use createRequire for getPlatformId patch (ESM read-only namespace)
+5846cfc Merge pull request #86 from qwibitai/fix/baileys-platform-id
+435b415 fix: patch Baileys 6.x getPlatformId bug for pairing codes
+4a030ef Merge pull request #84 from qwibitai/whatsapp-fixes
+e996415 chore: strip debug logging, add getMessageContentById to db
+87132a3 fix: bump Baileys to ^6.17.16
+468625c fix: Baileys 6.17 compat, getMessage retry, debug logging
+2c6c30e merge: catch up with nanoclaw-whatsapp/main
+4243575 merge: catch up with upstream main
+561a0b6 merge: catch up with upstream main
+b23bfa9 merge: catch up with upstream nanoclaw main
+a2620fb merge: catch up with upstream nanoclaw main
+f1bc56e merge: catch up with upstream nanoclaw main
+43b03d6 Merge branch 'main' into whatsapp-merge
+8441fe0 merge: catch up with upstream nanoclaw main
+6b27a0d chore: remove direct pino/pino-pretty dependency
+ccb4523 chore: remove direct pino/pino-pretty dependency
+5743a48 feat: add gated model management tools to Ollama MCP server
+08a1ff3 fix(types): add thread_id to NewMessage for Telegram topic support
+6f9c58f Merge remote-tracking branch 'telegram/main'
+6d887eb docs: update token count to 44.8k tokens · 22% of context window
+3e7f19c chore: bump version to 1.2.27
+52e54c9 Merge pull request #82 from lazer-sketch/fix/whatsapp-lid-jid-fallback
+d1381ea fix: normalize LID mentions in group messages for trigger matching
+c3d349a fix: add getMessage callback to prevent "Waiting for this message"
+45f302a docs: pass --dedicated-number flag in add-whatsapp SKILL.md
+5ab39b7 docs: update token count to 42.5k tokens · 21% of context window
+a56e802 chore: bump version to 1.2.30
+59c6aa6 fix(telegram): support message_thread_id for topics
+e87d15d feat: channel-aware text formatting for WhatsApp, Telegram, Slack, Signal
+2186208 fix: add senderPn fallback for LID JID translation, log unmatched messages
+a3f2af5 chore: remove auto-sync GitHub Actions
+c0f7ed7 chore: remove auto-sync GitHub Actions
+fadb300 chore: remove auto-sync GitHub Actions
+e9426da chore: remove auto-sync GitHub Actions
+937efe8 docs: update token count to 44.2k tokens · 22% of context window
+b0995c0 chore: bump version to 1.2.26
+a23fee2 fix: replace grammy with @whiskeysockets/baileys, remove leaked telegram files
+b96df1b docs: update token count to 42.1k tokens · 21% of context window
+9a01feb chore: bump version to 1.2.26
+6b504dc fix: replace grammy with @slack/bolt and @slack/types, remove leaked telegram files
+7cf6084 docs: update token count to 42.5k tokens · 21% of context window
+c6cd95f chore: bump version to 1.2.26
+c49c45a fix: replace grammy with googleapis/google-auth-library, remove leaked telegram files
+b5b5ca5 fix: add missing grammy dependency
+f9a0f4a docs: update token count to 42.4k tokens · 21% of context window
+aca388d chore: bump version to 1.2.29
+8671bfb Revert "chore: remove accidentally merged Telegram channel code"
+572b3a1 chore: bump version to 1.2.28
+3961c80 docs: update token count to 44.8k tokens · 22% of context window
+295c757 chore: bump version to 1.2.25
+e54849f docs: update token count to 44.4k tokens · 22% of context window
+cd133d2 chore: bump version to 1.2.25
+6aebe4e Merge remote-tracking branch 'upstream/main'
+0f9f47b Merge remote-tracking branch 'upstream/main'
+336c5a4 docs: update token count to 46.5k tokens · 23% of context window
+6eabc1a chore: bump version to 1.2.25
+9952a0e Merge remote-tracking branch 'upstream/main'
+f9b6ee3 Merge branch 'main' into skill/voice-transcription
+06c879b Merge branch 'main' into skill/local-whisper
+e45cf94 chore: bump version to 1.2.14
+102ea64 chore: bump version to 1.2.14
+2a2ab2a chore: bump version to 1.2.14
+dc63a90 Merge remote-tracking branch 'upstream/main'
+d844ad1 Merge remote-tracking branch 'upstream/main'
+b6fb897 Merge remote-tracking branch 'upstream/main'
+9df993b Merge branch 'main' into skill/voice-transcription
+9c6b900 Merge branch 'main' into skill/local-whisper
+423f5b2 Merge remote-tracking branch 'upstream/main'
+ede5d45 Merge remote-tracking branch 'upstream/main'
+5672548 Merge remote-tracking branch 'upstream/main'
+b1112dc Merge branch 'main' into skill/voice-transcription
+7037c5c Merge branch 'main' into skill/local-whisper
+52437ed Merge remote-tracking branch 'upstream/main'
+06f5ac1 Merge remote-tracking branch 'upstream/main'
+d955147 Merge remote-tracking branch 'upstream/main'
+da2ac9c Merge branch 'main' into skill/voice-transcription
+d5dc99d Merge branch 'main' into skill/local-whisper
+08755bc docs: update token count to 41.4k tokens · 21% of context window
+5a7a13b docs: update token count to 41.0k tokens · 21% of context window
+aa81de7 docs: update token count to 43.1k tokens · 22% of context window
+61ccfba Merge remote-tracking branch 'upstream/main'
+bb807ff Merge remote-tracking branch 'upstream/main'
+55b939c Merge remote-tracking branch 'upstream/main'
+e3b5775 Merge branch 'main' into skill/voice-transcription
+364a06d Merge branch 'main' into skill/local-whisper
+4cab695 Merge remote-tracking branch 'upstream/main'
+b3f3e78 Merge remote-tracking branch 'upstream/main'
+462948c Merge remote-tracking branch 'upstream/main'
+2c170f8 Merge branch 'main' into skill/voice-transcription
+a0f8af1 Merge branch 'main' into skill/local-whisper
+3c2f30f Merge remote-tracking branch 'upstream/main'
+b3d6281 Merge remote-tracking branch 'upstream/main'
+04be1d1 Merge remote-tracking branch 'upstream/main'
+e34724d Merge branch 'main' into skill/voice-transcription
+9cc0be4 Merge branch 'main' into skill/local-whisper
+bdefb93 fix: add concurrency group to prevent parallel fork-sync races
+a1c3adf fix: add concurrency group to prevent parallel fork-sync races
+0c5f7bd fix: add concurrency group to prevent parallel fork-sync races
+fb81d6d Merge branch 'main' into skill/voice-transcription
+6294413 Merge branch 'main' into skill/local-whisper
+b33900b Merge remote-tracking branch 'upstream/main'
+a30471d Merge remote-tracking branch 'upstream/main'
+dd8e3cf Merge remote-tracking branch 'upstream/main'
+843cf41 Merge branch 'main' into skill/voice-transcription
+681937b Merge branch 'main' into skill/local-whisper
+b97d403 Merge remote-tracking branch 'upstream/main'
+1692ce9 fix: re-fetch before skill branch merges to avoid stale refs
+b38f389 fix: re-fetch before skill branch merges to avoid stale refs
+afac3ff fix: re-fetch before skill branch merges to avoid stale refs
+905541c Merge branch 'main' into skill/voice-transcription
+e00ed02 Merge remote-tracking branch 'upstream/main'
+214532a Merge branch 'main' into skill/local-whisper
+d41d1bf Merge remote-tracking branch 'upstream/main'
+ac43a52 Merge branch 'main' into skill/voice-transcription
+e165529 Merge branch 'main' into skill/local-whisper
+69a796e fix: use GitHub App token for fork-sync (workflows permission needed)
+e130976 fix: use GitHub App token for fork-sync (workflows permission needed)
+3edaddb fix: use GitHub App token for fork-sync (workflows permission needed)
+d735bcc Merge branch 'main' into skill/voice-transcription
+35e15dd Merge branch 'main' into skill/local-whisper
+db3d54e fix: repair escaped newlines in fork-sync workflow
+738c636 fix: repair escaped newlines in fork-sync workflow
+f770e36 fix: repair escaped newlines in fork-sync workflow
+7adc311 Merge branch 'main' into skill/voice-transcription
+442a6f6 Merge branch 'main' into skill/local-whisper
+8b727e3 fix: re-commit fork-sync workflow (clean encoding)
+aa7f149 fix: bump openai to v6 (supports zod v4)
+a6a7641 fix: remove unused openai dependency (local whisper uses whisper.cpp)
+47af8cc fix: update sync condition to check repo name, not owner
+9d96415 fix: update sync condition to check repo name, not owner
+bbdc1b5 fix: update sync condition to check repo name, not owner
+bf97a35 fix: resolve merge conflict with markdown formatting PR
+652d06a feat: download Telegram file attachments to group directory
+5ec22df Merge commit 'f6b4b30' into rebuild-fork
+6e390ab Merge remote-tracking branch 'whatsapp/skill/voice-transcription' into rebuild-fork
+7736a9e Merge remote-tracking branch 'gmail/main' into rebuild-fork
+d017a8c Merge remote-tracking branch 'slack/main' into rebuild-fork
+7579fdb Merge remote-tracking branch 'whatsapp/main' into rebuild-fork
+99c8a12 ci: remove old merge-forward-skills.yml (replaced by fork-sync-skills.yml)
+7c9a1d0 ci: remove old merge-forward-skills.yml (replaced by fork-sync-skills.yml)
+56f2373 ci: remove old merge-forward-skills.yml (replaced by fork-sync-skills.yml)
+8782b4c ci: rename sync workflow to fork-sync-skills.yml to avoid merge conflicts with core
+8e93107 ci: rename sync workflow to fork-sync-skills.yml to avoid merge conflicts with core
+638ac3f ci: rename sync workflow to fork-sync-skills.yml to avoid merge conflicts with core
+7a1dfab ci: add upstream sync and merge-forward workflow
+dd8d5d0 ci: add upstream sync and merge-forward workflow
+604320e ci: add upstream sync and merge-forward workflow
+f6b4b30 Merge remote-tracking branch 'origin/main' into skill/local-whisper
+0986db4 Merge remote-tracking branch 'origin/main' into skill/voice-transcription
+2ef93b4 Merge remote-tracking branch 'origin/main' into skill/whatsapp
+b43ba76 Merge remote-tracking branch 'origin/main' into skill/slack
+ea51832 Merge remote-tracking branch 'origin/main' into skill/gmail
+2afb65f Merge remote-tracking branch 'origin/main' into skill/local-whisper
+5a369e4 Merge remote-tracking branch 'origin/main' into skill/voice-transcription
+ad5f24a Merge remote-tracking branch 'origin/main' into skill/whatsapp
+cfd7835 Merge remote-tracking branch 'origin/main' into skill/slack
+dfee382 Merge remote-tracking branch 'origin/main' into skill/gmail
+0446b95 Merge remote-tracking branch 'origin/main' into skill/local-whisper
+daefdea Merge remote-tracking branch 'origin/main' into skill/voice-transcription
+94b1ac6 Merge remote-tracking branch 'origin/main' into skill/whatsapp
+5c51d53 Merge remote-tracking branch 'origin/main' into skill/gmail
+2a8912c Merge remote-tracking branch 'origin/main' into skill/slack
+0ccecbd skill/local-whisper: switch voice transcription to local whisper.cpp
+c054cbc skill/voice-transcription: WhatsApp voice message transcription via OpenAI Whisper
+8698fc8 skill/whatsapp: WhatsApp channel integration
+0e9583a skill/gmail: Gmail channel integration
+dd7f6fd skill/slack: Slack channel integration
