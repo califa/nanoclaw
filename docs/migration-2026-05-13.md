@@ -92,8 +92,27 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.nanoclaw-helium-pr
 
 The v1 working tree (`/Users/joel/nanoclaw/`) must remain intact — the sidecar reads `dist/helium-api.js`, `dist/logger.js`, `dist/env.js` from there. Don't delete v1 or rebuild it in a way that purges `dist/`. Long-term: port the helium-api into a v2 sidecar package or wire it into the host as a new module.
 
+## Slack inbound — Tailscale Funnel
+
+v1 used Slack socket mode (app token). v2's `@chat-adapter/slack` is webhook-only — it needs Slack's servers to POST events to a public HTTPS endpoint. Stable, free path: **Tailscale Funnel**.
+
+- Tailscale Serve enabled on tailnet via `https://login.tailscale.com/f/serve?node=n4HEHQ6cf911CNTRL` (one-time).
+- Active config:
+
+  ```
+  tailscale serve  --bg http://127.0.0.1:3030
+  tailscale funnel --bg --https=443 http://127.0.0.1:3030
+  ```
+
+  (Configs persist through `tailscaled` — they survive reboots; no launchd job needed.)
+
+- **Slack Request URL:** `https://mini.tail4b9e08.ts.net/webhook/slack`
+- End-to-end verified — POSTing to that URL reaches v2's webhook server and gets validated by `SLACK_SIGNING_SECRET`.
+
+To configure in Slack: api.slack.com/apps → app → Event Subscriptions → paste Request URL → Verify. Then under *Subscribe to bot events* add `message.channels`, `message.groups`, `message.im`, `app_mention`. Save.
+
 ## Outstanding / TODO
 
-- **Slack webhook Request URL**: needs a public HTTPS endpoint forwarding to `http://localhost:3030/webhook/slack`. Plan is **Tailscale Funnel** (free, stable URL). Requires enabling Serve on the tailnet — one-time click at `https://login.tailscale.com/f/serve?node=n4HEHQ6cf911CNTRL`. Once enabled: `tailscale funnel --bg --https=443 http://127.0.0.1:3030`, then point Slack at `https://<machine>.<tailnet>.ts.net/webhook/slack`. Until configured, Bo can send to Slack but won't receive from it.
 - **WEBHOOK_PORT in plist**: if `/setup` regenerates the plist, re-add the `WEBHOOK_PORT=3030` `EnvironmentVariables` entry.
 - **Orphan `groups/main/` folder**: leftover from v1; left in place per user choice.
+- **Slack app Event Subscriptions**: paste the Request URL above and add the four bot events. Slack will send a `url_verification` challenge — v2 responds correctly.
