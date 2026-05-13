@@ -62,6 +62,10 @@ import { startCliServer, stopCliServer } from './cli/socket-server.js';
 
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
+import { startHeliumApi } from './helium-api.js';
+import type { Server as HttpServer } from 'http';
+
+let heliumServer: HttpServer | null = null;
 
 async function main(): Promise<void> {
   log.info('NanoClaw starting');
@@ -177,6 +181,11 @@ async function main(): Promise<void> {
   // 7. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
 
+  // 8. Helium tab-group + 1Password credential proxy (port 9224).
+  // Local install carryover from the v1 fork. Safe to leave running even
+  // when Helium isn't open — endpoints degrade gracefully.
+  heliumServer = startHeliumApi();
+
   log.info('NanoClaw running');
 }
 
@@ -193,6 +202,10 @@ async function shutdown(signal: string): Promise<void> {
   stopDeliveryPolls();
   stopHostSweep();
   await stopCliServer();
+  if (heliumServer) {
+    await new Promise<void>((resolve) => heliumServer!.close(() => resolve()));
+    heliumServer = null;
+  }
   try {
     await teardownChannelAdapters();
   } finally {

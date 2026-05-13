@@ -72,25 +72,22 @@ No `.v1-container-config.json` fallbacks. No `container.json` for the `main` gro
 
 v1 fork was **225 commits** ahead of upstream. Stashed reference at `docs/v1-fork-reference/` (commits.txt, diffstat.txt, README.md). No source-level porting — v2's architecture diverges enough that patches don't apply.
 
-## Helium proxy sidecar
+## Helium / 1Password / send-file proxy (port 9224)
 
-The v1 fork integrated a custom HTTP proxy at `host.docker.internal:9224` into its main Node process. It provided per-tab gating (`/helium/...`), the 1Password credential pipeline (`/credentials/...`), and the Slack `/send-file` endpoint. v2's host doesn't include any of this.
+The v1 fork integrated a custom HTTP proxy at `host.docker.internal:9224` into its main Node process. It provides per-tab gating (`/helium/...`), the 1Password credential pipeline (`/credentials/...`), and the Slack `/send-file` endpoint.
 
-Rather than port the ~930 lines into v2 now, we run the v1 compiled module as a sidecar:
+**Ported into v2** (no longer a sidecar):
 
-- Wrapper: `scripts/helium-proxy-sidecar.mjs` — imports `/Users/joel/nanoclaw-v1-legacy/dist/helium-api.js` and calls `startHeliumApi()`.
-- Service: `~/Library/LaunchAgents/com.nanoclaw-helium-proxy.plist` — KeepAlive, WorkingDirectory=`/Users/joel/nanoclaw-v1-legacy` (so the v1 module finds its `.env`).
-- Logs: `logs/helium-proxy.log` + `logs/helium-proxy.error.log`.
+- `src/helium-api.ts` — module copied from v1 verbatim, with `./logger.js` import retargeted at `./legacy-logger.js`.
+- `src/legacy-logger.ts` — v1's pino-style `(data, msg)` logger, kept private to helium-api so v1's call sites don't need touching.
+- `scripts/op-{wrapper,get-field}.sh` — 1Password CLI shims, untouched.
+- Wired into `src/index.ts` startup (`startHeliumApi()` after step 7) + graceful shutdown hook.
 
-To control:
+Dropped during the port: `/usage`, `/meetings`, `GET|POST /tasks`, `PATCH /tasks/:id`, `POST /meetings` endpoints. They queried v1-only tables (`token_usage`, `meeting_briefs`, `suggested_tasks`) that don't exist in v2's schema. Would need v2-native equivalents to revive.
 
-```bash
-launchctl kickstart -k "gui/$(id -u)/com.nanoclaw-helium-proxy"   # restart
-launchctl bootout   "gui/$(id -u)/com.nanoclaw-helium-proxy"      # stop
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.nanoclaw-helium-proxy.plist  # start
-```
+Everything else still works the same way Bo expects: `/helium/*`, `/credentials/*`, `/cdp` proxy, `/send-file`.
 
-The v1 working tree (`/Users/joel/nanoclaw-v1-legacy/`) must remain intact — the sidecar reads `dist/helium-api.js`, `dist/logger.js`, `dist/env.js` from there. Don't delete v1-legacy or rebuild it in a way that purges `dist/`. Long-term: port the helium-api into the v2 host (or a separate sidecar package), then v1-legacy can be retired entirely.
+**Live dependencies on v1-legacy: none.** The v2 host PID owns port 9224 directly; v1-legacy is now kept only for historical artifacts (message DB, fork source, original CLAUDE.md content).
 
 ## Slack inbound — Tailscale Funnel
 
