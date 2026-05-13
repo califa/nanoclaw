@@ -30,12 +30,7 @@ export const HELIUM_API_PORT = 9224;
 const CLAUDE_EXT_ID = 'fcoeoabgfenejglbffodgkkbkcdhcgfn';
 const BO_GROUP_COLOR = 'cyan';
 
-const CREDENTIAL_ALLOWLIST_PATH = path.join(
-  os.homedir(),
-  '.config',
-  'nanoclaw',
-  'credential-allowlist.json',
-);
+const CREDENTIAL_ALLOWLIST_PATH = path.join(os.homedir(), '.config', 'nanoclaw', 'credential-allowlist.json');
 
 interface CredentialAllowlist {
   vault: string;
@@ -66,29 +61,23 @@ function getCredentials(service: string): Record<string, string> | null {
       const opScript = path.join(process.cwd(), 'scripts', 'op-get-field.sh');
 
       if (field === 'one-time password') {
-        const value = execFileSync(
-          '/bin/bash',
-          [opScript, opToken, entry.item, allowlist.vault, 'otp', ''],
-          { timeout: 15000 },
-        )
+        const value = execFileSync('/bin/bash', [opScript, opToken, entry.item, allowlist.vault, 'otp', ''], {
+          timeout: 15000,
+        })
           .toString()
           .trim();
         result['otp'] = value;
       } else {
-        const value = execFileSync(
-          '/bin/bash',
-          [opScript, opToken, entry.item, allowlist.vault, 'field', field],
-          { timeout: 15000 },
-        )
+        const value = execFileSync('/bin/bash', [opScript, opToken, entry.item, allowlist.vault, 'field', field], {
+          timeout: 15000,
+        })
           .toString()
           .trim();
         result[field] = value;
       }
     } catch (err) {
       const stderr =
-        err && typeof err === 'object' && 'stderr' in err
-          ? (err as { stderr: Buffer }).stderr?.toString()
-          : undefined;
+        err && typeof err === 'object' && 'stderr' in err ? (err as { stderr: Buffer }).stderr?.toString() : undefined;
       logger.warn(
         {
           service,
@@ -121,11 +110,7 @@ async function listTargets(): Promise<CdpTarget[]> {
   }
 }
 
-async function cdpEval(
-  wsUrl: string,
-  expression: string,
-  awaitPromise = false,
-): Promise<unknown> {
+async function cdpEval(wsUrl: string, expression: string, awaitPromise = false): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     const msgId = Math.floor(Math.random() * 1e9);
@@ -141,10 +126,7 @@ async function cdpEval(
       fn();
     };
 
-    const timer = setTimeout(
-      () => finish(() => reject(new Error('CDP timeout'))),
-      5000,
-    );
+    const timer = setTimeout(() => finish(() => reject(new Error('CDP timeout'))), 5000);
 
     ws.addEventListener('open', () => {
       ws.send(
@@ -183,19 +165,13 @@ async function cdpEval(
       }
     });
 
-    ws.addEventListener('error', () =>
-      finish(() => reject(new Error('WebSocket error'))),
-    );
+    ws.addEventListener('error', () => finish(() => reject(new Error('WebSocket error'))));
   });
 }
 
 async function getExtSw(): Promise<CdpTarget | null> {
   const targets = await listTargets();
-  return (
-    targets.find(
-      (t) => t.type === 'service_worker' && t.url.includes(CLAUDE_EXT_ID),
-    ) ?? null
-  );
+  return targets.find((t) => t.type === 'service_worker' && t.url.includes(CLAUDE_EXT_ID)) ?? null;
 }
 
 async function evalInExt<T>(expression: string): Promise<T> {
@@ -205,9 +181,7 @@ async function evalInExt<T>(expression: string): Promise<T> {
 }
 
 async function getBoGroupId(): Promise<number | null> {
-  const raw = await evalInExt<string>(
-    'chrome.tabGroups.query({title: "Bo"}).then(g => JSON.stringify(g))',
-  );
+  const raw = await evalInExt<string>('chrome.tabGroups.query({title: "Bo"}).then(g => JSON.stringify(g))');
   const groups = JSON.parse(raw) as Array<{ id: number }>;
   return groups[0]?.id ?? null;
 }
@@ -219,18 +193,12 @@ async function moveTabsToBoGroup(chromeTabIds: number[]): Promise<void> {
 
   if (groupId === null) {
     const first = ids.shift()!;
-    groupId = await evalInExt<number>(
-      `chrome.tabs.group({tabIds: [${first}]}).then(id => id)`,
-    );
-    await evalInExt<void>(
-      `chrome.tabGroups.update(${groupId}, {title: "Bo", color: "${BO_GROUP_COLOR}"})`,
-    );
+    groupId = await evalInExt<number>(`chrome.tabs.group({tabIds: [${first}]}).then(id => id)`);
+    await evalInExt<void>(`chrome.tabGroups.update(${groupId}, {title: "Bo", color: "${BO_GROUP_COLOR}"})`);
   }
 
   if (ids.length > 0) {
-    await evalInExt<void>(
-      `chrome.tabs.group({tabIds: ${JSON.stringify(ids)}, groupId: ${groupId}})`,
-    );
+    await evalInExt<void>(`chrome.tabs.group({tabIds: ${JSON.stringify(ids)}, groupId: ${groupId}})`);
   }
 }
 
@@ -249,9 +217,7 @@ async function ensureBoWindow(): Promise<number> {
 
     if (windowId !== null) {
       // Check that this window is NOT the user's main (focused) window
-      const focusedWindowId = await evalInExt<number | null>(
-        `chrome.windows.getLastFocused().then(w => w.id)`,
-      );
+      const focusedWindowId = await evalInExt<number | null>(`chrome.windows.getLastFocused().then(w => w.id)`);
       if (windowId !== focusedWindowId) {
         return windowId;
       }
@@ -266,9 +232,7 @@ async function ensureBoWindow(): Promise<number> {
 
   // Unminimize but keep it behind — minimized windows can't run CDP properly
   await new Promise((r) => setTimeout(r, 300));
-  await evalInExt<void>(
-    `chrome.windows.update(${newWindowId}, {state: 'normal', focused: false})`,
-  );
+  await evalInExt<void>(`chrome.windows.update(${newWindowId}, {state: 'normal', focused: false})`);
 
   return newWindowId;
 }
@@ -302,9 +266,7 @@ async function createBoTab(): Promise<{
 
     // Find the CDP target for this Chrome tab
     const targets = await listTargets();
-    const match = targets.find(
-      (t) => t.type === 'page' && t.url === 'about:blank',
-    );
+    const match = targets.find((t) => t.type === 'page' && t.url === 'about:blank');
     if (!match) {
       logger.warn('Could not find CDP target for background tab');
       // Fallback to /json/new
@@ -333,10 +295,7 @@ async function createBoTab(): Promise<{
   // Find its Chrome tab ID via the marker technique
   const chromeId = await getChromeTabId(newTarget);
   if (chromeId === null) {
-    logger.warn(
-      { targetId: newTarget.id },
-      'Could not get Chrome tab ID for new tab',
-    );
+    logger.warn({ targetId: newTarget.id }, 'Could not get Chrome tab ID for new tab');
   } else {
     await moveTabsToBoGroup([chromeId]);
   }
@@ -359,22 +318,10 @@ async function getTabContent(targetId: string): Promise<{
   if (!target) return null;
 
   try {
-    const title = (await cdpEval(
-      target.webSocketDebuggerUrl,
-      'document.title',
-    )) as string;
-    const url = (await cdpEval(
-      target.webSocketDebuggerUrl,
-      'location.href',
-    )) as string;
-    const text = (await cdpEval(
-      target.webSocketDebuggerUrl,
-      'document.body?.innerText ?? ""',
-    )) as string;
-    const html = (await cdpEval(
-      target.webSocketDebuggerUrl,
-      'document.documentElement.outerHTML',
-    )) as string;
+    const title = (await cdpEval(target.webSocketDebuggerUrl, 'document.title')) as string;
+    const url = (await cdpEval(target.webSocketDebuggerUrl, 'location.href')) as string;
+    const text = (await cdpEval(target.webSocketDebuggerUrl, 'document.body?.innerText ?? ""')) as string;
+    const html = (await cdpEval(target.webSocketDebuggerUrl, 'document.documentElement.outerHTML')) as string;
     return {
       title,
       url,
@@ -391,18 +338,12 @@ async function getChromeTabId(target: CdpTarget): Promise<number | null> {
   const marker = `bo-marker-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const origTitle = target.title;
   try {
-    await cdpEval(
-      target.webSocketDebuggerUrl,
-      `document.title = ${JSON.stringify(marker)}`,
-    );
+    await cdpEval(target.webSocketDebuggerUrl, `document.title = ${JSON.stringify(marker)}`);
     const chromeId = await evalInExt<number>(
       `chrome.tabs.query({title: ${JSON.stringify(marker)}}).then(tabs => tabs[0]?.id ?? -1)`,
     );
     // Best-effort title restore
-    await cdpEval(
-      target.webSocketDebuggerUrl,
-      `document.title = ${JSON.stringify(origTitle)}`,
-    ).catch(() => {});
+    await cdpEval(target.webSocketDebuggerUrl, `document.title = ${JSON.stringify(origTitle)}`).catch(() => {});
     return chromeId === -1 ? null : chromeId;
   } catch {
     return null;
@@ -412,11 +353,7 @@ async function getChromeTabId(target: CdpTarget): Promise<number | null> {
 // watchId → set of known tab IDs at watch-start time
 const watches = new Map<string, Set<string>>();
 
-function jsonResp(
-  res: http.ServerResponse,
-  status: number,
-  data: unknown,
-): void {
+function jsonResp(res: http.ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -453,9 +390,7 @@ export function startHeliumApi(): http.Server {
       // directly to Chrome (which rejects non-localhost Host headers).
       if (method === 'GET' && url.pathname.startsWith('/cdp/json')) {
         const chromePath = url.pathname.replace('/cdp', '');
-        const chromeRes = await fetch(
-          `http://${CDP_HOST}:${CDP_PORT}${chromePath}`,
-        );
+        const chromeRes = await fetch(`http://${CDP_HOST}:${CDP_PORT}${chromePath}`);
         if (!chromeRes.ok) {
           jsonResp(res, chromeRes.status, { error: 'Chrome CDP error' });
           return;
@@ -474,10 +409,7 @@ export function startHeliumApi(): http.Server {
 
         // ── PUT /cdp/json/new ────────────────────────────────────────────────
       } else if (method === 'PUT' && url.pathname === '/cdp/json/new') {
-        const chromeRes = await fetch(
-          `http://${CDP_HOST}:${CDP_PORT}/json/new`,
-          { method: 'PUT' },
-        );
+        const chromeRes = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new`, { method: 'PUT' });
         const raw = await chromeRes.text();
         const rewritten = raw.replace(
           /ws:\/\/localhost:9222\/devtools\//g,
@@ -620,10 +552,7 @@ export function startHeliumApi(): http.Server {
         });
         // ── POST /helium/restore-focus ────────────────────────────────────
         // Ensure the user's Helium window stays in front of Bo's window.
-      } else if (
-        method === 'POST' &&
-        url.pathname === '/helium/restore-focus'
-      ) {
+      } else if (method === 'POST' && url.pathname === '/helium/restore-focus') {
         try {
           // Find all windows and focus the one that isn't Bo's
           const boGroupId = await getBoGroupId();
@@ -653,12 +582,11 @@ export function startHeliumApi(): http.Server {
         // ── GET /credentials/list ────────────────────────────────────────
       } else if (method === 'GET' && url.pathname === '/credentials/list') {
         try {
-          const allowlist: CredentialAllowlist = JSON.parse(
-            fs.readFileSync(CREDENTIAL_ALLOWLIST_PATH, 'utf-8'),
-          );
-          const services = Object.entries(allowlist.services).map(
-            ([name, entry]) => ({ service: name, fields: entry.fields }),
-          );
+          const allowlist: CredentialAllowlist = JSON.parse(fs.readFileSync(CREDENTIAL_ALLOWLIST_PATH, 'utf-8'));
+          const services = Object.entries(allowlist.services).map(([name, entry]) => ({
+            service: name,
+            fields: entry.fields,
+          }));
           jsonResp(res, 200, { services });
         } catch (err) {
           jsonResp(res, 500, {
@@ -723,20 +651,17 @@ export function startHeliumApi(): http.Server {
         const fileSize = fileBuffer.length;
 
         // Step 1: get upload URL
-        const urlRes = await fetch(
-          'https://slack.com/api/files.getUploadURLExternal',
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              filename: fname,
-              length: String(fileSize),
-            }),
+        const urlRes = await fetch('https://slack.com/api/files.getUploadURLExternal', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
           },
-        );
+          body: new URLSearchParams({
+            filename: fname,
+            length: String(fileSize),
+          }),
+        });
         const urlData = (await urlRes.json()) as {
           ok: boolean;
           upload_url?: string;
@@ -764,17 +689,14 @@ export function startHeliumApi(): http.Server {
         };
         if (comment) completeBody.initial_comment = comment;
 
-        const completeRes = await fetch(
-          'https://slack.com/api/files.completeUploadExternal',
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams(completeBody),
+        const completeRes = await fetch('https://slack.com/api/files.completeUploadExternal', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
           },
-        );
+          body: new URLSearchParams(completeBody),
+        });
         const completeData = (await completeRes.json()) as {
           ok: boolean;
           files?: Array<{ permalink?: string }>;
@@ -788,10 +710,7 @@ export function startHeliumApi(): http.Server {
         }
 
         const permalink = completeData.files?.[0]?.permalink;
-        logger.info(
-          { chatJid, file: fname, permalink },
-          'File uploaded to Slack',
-        );
+        logger.info({ chatJid, file: fname, permalink }, 'File uploaded to Slack');
         jsonResp(res, 200, { status: 'ok', permalink });
       } else {
         jsonResp(res, 404, { error: 'Not found' });
