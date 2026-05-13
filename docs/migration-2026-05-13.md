@@ -1,6 +1,6 @@
 # NanoClaw v1 → v2 migration — 2026-05-13
 
-Migrated from `/Users/joel/nanoclaw/` (v1.2.45) to `/Users/joel/nanoclaw-v2/` on 2026-05-13.
+Migrated v1 (1.2.45) to v2 on 2026-05-13. Same day, the install dirs were also renamed: the v2 install (which during the migration lived at `/Users/joel/nanoclaw-v2/`) was moved to `/Users/joel/nanoclaw/`, and the v1 install (originally at `/Users/joel/nanoclaw/`) was moved to `/Users/joel/nanoclaw-v1-legacy/`. References below use the **current** paths.
 
 ## Deterministic phase (migrate-v2.sh)
 
@@ -23,7 +23,7 @@ All 6 steps succeeded:
 
 Ran `setup/install-{slack,telegram,whatsapp}.sh`. Copied Slack/Telegram/WhatsApp adapter modules from the `channels` branch, registered self-imports, installed pinned `@chat-adapter/*@4.26.0` + Baileys `7.0.0-rc.9`.
 
-Also manually copied `/Users/joel/nanoclaw/store/auth/` → `/Users/joel/nanoclaw-v2/store/auth/` (2168 Baileys keystore files including `creds.json`). The `CHANNEL_AUTH_REGISTRY.whatsapp.candidatePaths` in `setup/migrate-v2/shared.ts` does not include `store/auth/`, so this would have been missed even if WhatsApp had been selected during the script run.
+Also manually copied `/Users/joel/nanoclaw-v1-legacy/store/auth/` → `/Users/joel/nanoclaw/store/auth/` (2168 Baileys keystore files including `creds.json`). The `CHANNEL_AUTH_REGISTRY.whatsapp.candidatePaths` in `setup/migrate-v2/shared.ts` does not include `store/auth/`, so this would have been missed even if WhatsApp had been selected during the script run.
 
 ### Phase 0b — Service swap + smoke test
 
@@ -54,7 +54,7 @@ Originals saved as `groups/<name>/CLAUDE.local.md.v1-backup`.
 Path fixes applied throughout kept content:
 - `/workspace/group/` → `/workspace/agent/`
 - `/workspace/ipc/...` → removed (no IPC in v2)
-- `/Users/joel/nanoclaw/` (in slack_main Host Operations) → `/Users/joel/nanoclaw-v2/`
+- v1 paths in slack_main Host Operations updated to v2 (later flattened: now plain `/Users/joel/nanoclaw/`)
 - `com.nanoclaw` (service name) → `com.nanoclaw-v2-40b8cd25`
 
 ### Phase 3 — Container mounts
@@ -78,8 +78,8 @@ The v1 fork integrated a custom HTTP proxy at `host.docker.internal:9224` into i
 
 Rather than port the ~930 lines into v2 now, we run the v1 compiled module as a sidecar:
 
-- Wrapper: `scripts/helium-proxy-sidecar.mjs` — imports `/Users/joel/nanoclaw/dist/helium-api.js` and calls `startHeliumApi()`.
-- Service: `~/Library/LaunchAgents/com.nanoclaw-helium-proxy.plist` — KeepAlive, WorkingDirectory=`/Users/joel/nanoclaw` (so the v1 module finds its `.env`).
+- Wrapper: `scripts/helium-proxy-sidecar.mjs` — imports `/Users/joel/nanoclaw-v1-legacy/dist/helium-api.js` and calls `startHeliumApi()`.
+- Service: `~/Library/LaunchAgents/com.nanoclaw-helium-proxy.plist` — KeepAlive, WorkingDirectory=`/Users/joel/nanoclaw-v1-legacy` (so the v1 module finds its `.env`).
 - Logs: `logs/helium-proxy.log` + `logs/helium-proxy.error.log`.
 
 To control:
@@ -90,7 +90,7 @@ launchctl bootout   "gui/$(id -u)/com.nanoclaw-helium-proxy"      # stop
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.nanoclaw-helium-proxy.plist  # start
 ```
 
-The v1 working tree (`/Users/joel/nanoclaw/`) must remain intact — the sidecar reads `dist/helium-api.js`, `dist/logger.js`, `dist/env.js` from there. Don't delete v1 or rebuild it in a way that purges `dist/`. Long-term: port the helium-api into a v2 sidecar package or wire it into the host as a new module.
+The v1 working tree (`/Users/joel/nanoclaw-v1-legacy/`) must remain intact — the sidecar reads `dist/helium-api.js`, `dist/logger.js`, `dist/env.js` from there. Don't delete v1-legacy or rebuild it in a way that purges `dist/`. Long-term: port the helium-api into the v2 host (or a separate sidecar package), then v1-legacy can be retired entirely.
 
 ## Slack inbound — Tailscale Funnel
 

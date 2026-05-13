@@ -7,10 +7,10 @@
 // reuse the v1 compiled module verbatim. The v1 working tree stays
 // read-only — this script never writes into it.
 //
-// To rebuild v1 without breaking this, leave `/Users/joel/nanoclaw/dist/`
+// To rebuild v1 without breaking this, leave `/Users/joel/nanoclaw-v1-legacy/dist/`
 // in place; this script reads compiled JS only.
 
-import('/Users/joel/nanoclaw/dist/helium-api.js')
+import('/Users/joel/nanoclaw-v1-legacy/dist/helium-api.js')
   .then((mod) => {
     if (typeof mod.startHeliumApi !== 'function') {
       throw new Error('startHeliumApi not exported by v1 helium-api dist');

@@ -1,10 +1,10 @@
 # v1 Fork Reference
 
-This directory captures what was in your customized v1 NanoClaw install (`/Users/joel/nanoclaw/`, branch `main` of `https://github.com/califa/nanoclaw.git`), for reference after the v2 migration. None of this is wired into v2 — v2's architecture diverges enough that source-level patches don't apply.
+This directory captures what was in your customized v1 NanoClaw install (`/Users/joel/nanoclaw-v1-legacy/`, branch `main` of `https://github.com/califa/nanoclaw.git`), for reference after the v2 migration. None of this is wired into v2 — v2's architecture diverges enough that source-level patches don't apply.
 
 ## Source of truth
 
-- v1 working tree (read-only): `/Users/joel/nanoclaw/`
+- v1 working tree (read-only): `/Users/joel/nanoclaw-v1-legacy/`
 - v1 upstream: `https://github.com/qwibitai/nanoclaw.git` (branch `main`)
 - v1 fork was **225 commits ahead** of upstream at migration time.
 
@@ -84,13 +84,13 @@ cat docs/v1-fork-reference/commits.txt
 cat docs/v1-fork-reference/diffstat.txt
 
 # Read a specific commit
-cd /Users/joel/nanoclaw && git show <sha>
+cd /Users/joel/nanoclaw-v1-legacy && git show <sha>
 
 # Compare a specific file
-cd /Users/joel/nanoclaw && git diff upstream/main..HEAD -- <path>
+cd /Users/joel/nanoclaw-v1-legacy && git diff upstream/main..HEAD -- <path>
 
 # Read a v1 skill you might want to port
-cat /Users/joel/nanoclaw/.claude/skills/<name>/SKILL.md
+cat /Users/joel/nanoclaw-v1-legacy/.claude/skills/<name>/SKILL.md
 ```
 
-The v1 working tree is intact and read-only from v2's perspective — nothing in this migration modified `/Users/joel/nanoclaw/`.
+The v1 working tree is intact and read-only from v2's perspective — nothing in this migration modified `/Users/joel/nanoclaw-v1-legacy/`.
