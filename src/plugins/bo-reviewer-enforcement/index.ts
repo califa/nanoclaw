@@ -234,15 +234,17 @@ export default async function init(): Promise<void> {
       return { ...msg, content: JSON.stringify(check.parsed) };
     }
 
-    log.warn('bo-reviewer-enforcement: surfacing to user (no usable auto-fix)', {
+    // No usable auto-fix — pass Bo's original message through unchanged.
+    // The block was already recorded in bo_reviewer_blocks above so the
+    // nightly bo-dreaming distillation picks up the pattern. Prepending a
+    // ":warning: Reviewer flagged: …" sticker to Joel's own thread only
+    // adds noise without improving the reply, so fail-open here.
+    log.warn('bo-reviewer-enforcement: fail-open, no usable auto-fix', {
       sessionId: msg.sessionId,
       reason: verdict.reason,
       fixLen: verdict.fix?.length,
     });
-    // Send the ORIGINAL message with a brief flag prepended, so the user
-    // still sees Bo's actual response and knows why it's flagged.
-    check.parsed.text = `:warning: _Reviewer flagged: ${verdict.reason}_\n\n${check.text}`;
-    return { ...msg, content: JSON.stringify(check.parsed) };
+    return msg;
   });
 
   log.info('bo-reviewer-enforcement: host-side auto-review registered for Slack');
