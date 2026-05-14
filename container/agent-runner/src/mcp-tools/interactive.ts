@@ -1,8 +1,12 @@
 /**
- * Interactive MCP tools: ask_user_question, send_card.
+ * Interactive MCP tools: ask_user_question, send_card, send_blocks.
  *
  * ask_user_question is a blocking tool call — it writes a messages_out row
  * with a question card, then polls messages_in for the response.
+ *
+ * send_blocks is Slack-specific raw Block Kit pass-through for cases where
+ * send_card's cross-platform Card schema isn't expressive enough (section
+ * blocks with fields, headers, dividers, etc.).
  */
 import { findQuestionResponse, markCompleted } from '../db/messages-in.js';
 import { writeMessageOut } from '../db/messages-out.js';
@@ -166,4 +170,54 @@ export const sendCard: McpToolDefinition = {
   },
 };
 
-registerTools([askUserQuestion, sendCard]);
+export const sendBlocks: McpToolDefinition = {
+  tool: {
+    name: 'send_blocks',
+    description:
+      'Send raw Slack Block Kit blocks. Use this when the cross-platform send_card schema is not expressive enough — e.g. section blocks with fields, header blocks, dividers between sections, accessory elements. Slack-only; non-Slack destinations receive the fallbackText instead.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Destination name. Optional if you have only one destination.',
+        },
+        blocks: {
+          type: 'array',
+          description:
+            'Array of Slack Block Kit block objects (each with a top-level `type` field like "header", "section", "divider", etc.). Posted via chat.postMessage with the blocks field.',
+        },
+        fallbackText: {
+          type: 'string',
+          description:
+            'Plain text shown in Slack notifications and used as the message body on non-Slack destinations. Required — without it the message is unreadable in mobile push and previews.',
+        },
+      },
+      required: ['blocks', 'fallbackText'],
+    },
+  },
+  async handler(args) {
+    const blocks = args.blocks;
+    const fallbackText = args.fallbackText as string;
+    if (!Array.isArray(blocks) || blocks.length === 0) return err('blocks must be a non-empty array');
+    if (!fallbackText || typeof fallbackText !== 'string') {
+      return err('fallbackText is required (used for notifications and non-Slack fallback)');
+    }
+
+    const id = generateId();
+    const r = routing();
+    writeMessageOut({
+      id,
+      kind: 'chat-sdk',
+      platform_id: r.platform_id,
+      channel_type: r.channel_type,
+      thread_id: r.thread_id,
+      content: JSON.stringify({ type: 'blocks', blocks, fallbackText }),
+    });
+
+    log(`send_blocks: ${id} (${blocks.length} blocks)`);
+    return ok(`Block Kit message sent (id: ${id}, ${blocks.length} blocks)`);
+  },
+};
+
+registerTools([askUserQuestion, sendCard, sendBlocks]);

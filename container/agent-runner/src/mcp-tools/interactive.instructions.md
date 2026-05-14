@@ -2,18 +2,50 @@
 
 The two tools here solve different problems: `ask_user_question` forces a decision and waits for it; `send_card` displays structured content and moves on.
 
-### Slack Block Kit — markdown tables auto-convert
+### Slack Block Kit — three paths, pick the right one
 
-On Slack, you do **not** need a special API for table rendering. Write a normal GitHub-flavored markdown table in the body of any `send_message` / `<message>` reply and the channel adapter parses it into a Block Kit `rich_text_table` automatically:
+You have three ways to get rich rendering into Slack. Use the simplest one that works.
+
+#### 1. Markdown tables (no special tool needed)
+
+Just write a GitHub-flavored markdown table in any `send_message` / `<message>` reply. The channel adapter parses it and posts a Block Kit `rich_text_table` automatically:
 
 ```
 | #  | Task                              | Priority |
 |----|-----------------------------------|----------|
 | 1  | Review competitive analysis doc   | High     |
-| 2  | Mock up draft approval workflow   | High     |
 ```
 
-This is `chat.postMessage` with `blocks` under the hood — the adapter's `toBlocksWithTable` step. Slack permits at most one table block per message; additional tables in the same message fall back to ASCII inside a code fence, which is also fine. **Do not refuse a table request with "send_message only supports plain text" — that was a v1 limitation that no longer applies.**
+Slack permits at most one table block per message; additional tables in the same message fall back to ASCII in a code fence. **Do not refuse a table request with "send_message only supports plain text" — that was a v1 limitation that no longer applies.**
+
+#### 2. `send_card` — cross-platform structured cards
+
+`mcp__nanoclaw__send_card({ card, fallbackText? })` for the standard `CardElement` schema (title / description / children / actions). Renders to Block Kit on Slack, Adaptive Cards on Teams, native cards on GChat. Use for content that should work on any channel.
+
+#### 3. `send_blocks` — raw Slack Block Kit
+
+`mcp__nanoclaw__send_blocks({ blocks, fallbackText, to? })` for native Slack Block Kit. Use when the `CardElement` schema isn't expressive enough — e.g. section blocks with `fields`, header blocks, dividers separating section groups, accessory elements. Pass an array of Block Kit block objects exactly as you'd send to `chat.postMessage`. `fallbackText` is required (used for notifications and on non-Slack destinations).
+
+Example:
+
+```json
+{
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": "Today's Tasks" } },
+    { "type": "section",
+      "text": { "type": "mrkdwn", "text": "*Design sequence preview*" },
+      "fields": [
+        { "type": "mrkdwn", "text": "*For*\nJames" },
+        { "type": "mrkdwn", "text": "*Due*\nFri May 15" }
+      ]
+    },
+    { "type": "divider" }
+  ],
+  "fallbackText": "Today's tasks: Design sequence preview (for James, due May 15)"
+}
+```
+
+Do **not** dump raw Block Kit JSON into the `text` field of `send_message` — that posts the literal JSON as a string. The correct tool for raw blocks is `send_blocks`.
 
 ### Asking a multiple-choice question (`ask_user_question`)
 
