@@ -200,6 +200,27 @@ try {
     process.exit(0);
   }
 
+  // Anti-race guard: Claude Code CLI also refreshes lazily when it sees a
+  // near-expired token, and Anthropic's refresh tokens are single-use
+  // (rotate on use). If we refresh here while another Claude Code process
+  // is also refreshing, one of them gets a 401. If the canonical file was
+  // touched in the last 60 seconds, assume another process just refreshed
+  // it — skip our own refresh, just resync the cache. This matches v1's
+  // working behavior in practice (v1 wasn't a Claude Code consumer so the
+  // race didn't manifest; v2 + interactive Claude Code on the host = race
+  // surface exists).
+  try {
+    const stat = (await import('fs')).statSync(CREDENTIALS_FILE);
+    const mtimeAgeMs = Date.now() - stat.mtimeMs;
+    if (mtimeAgeMs < 60_000) {
+      log(`Token expires in ${minRemaining} min, but canonical file was touched ${Math.round(mtimeAgeMs / 1000)}s ago — skipping refresh, syncing cache only`);
+      syncCredentials(before.raw);
+      process.exit(0);
+    }
+  } catch {
+    /* fall through to refresh */
+  }
+
   // Within refresh window or expired — attempt HTTP refresh first, then CLI fallback.
   if (msUntilExpiry <= 0) {
     log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — attempting HTTP refresh`);
