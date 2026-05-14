@@ -81,7 +81,14 @@ async function main(): Promise<void> {
   // (see container-runner.ts), so it must exist before the first spawn.
   // The refresher launchd job (com.claude.token-refresh) keeps it current
   // every 5 minutes; this run handles startup + post-restart hot-paths.
-  syncOAuthCredentials();
+  // Also runs on a 45-minute interval as an in-process safety net — matches
+  // v1's behavior; redundant with the launchd refresher but harmless and
+  // catches the case where the launchd job is stopped/misconfigured.
+  syncOAuthCredentials().catch((err) => log.warn('Initial OAuth sync failed', { err }));
+  setInterval(
+    () => syncOAuthCredentials().catch((err) => log.warn('Periodic OAuth sync failed', { err })),
+    45 * 60 * 1000,
+  ).unref?.();
 
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');

@@ -5,6 +5,7 @@
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
@@ -276,18 +277,10 @@ function buildMounts(
   // a transient deletion never empties the cache. v1 pattern; do not
   // change without testing through a `claude auth logout` cycle.
   try {
-    const cachedCreds = path.join(process.env.HOME ?? '', '.config', 'nanoclaw', 'claude-oauth.json');
+    const cachedCreds = path.join(os.homedir(), '.config', 'nanoclaw', 'claude-oauth.json');
     if (fs.existsSync(cachedCreds)) {
       fs.mkdirSync(claudeDir, { recursive: true });
       fs.copyFileSync(cachedCreds, path.join(claudeDir, '.credentials.json'));
-    } else {
-      // First-boot fallback only: if the cache hasn't been written yet, read
-      // from the canonical file. After this runs once the cache will exist.
-      const hostCreds = path.join(process.env.HOME ?? '', '.claude', '.credentials.json');
-      if (fs.existsSync(hostCreds)) {
-        fs.mkdirSync(claudeDir, { recursive: true });
-        fs.copyFileSync(hostCreds, path.join(claudeDir, '.credentials.json'));
-      }
     }
   } catch (err) {
     log.warn('Failed to sync Claude OAuth credentials into container', { err });

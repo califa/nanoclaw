@@ -24,15 +24,13 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 import { log } from './log.js';
 
-const SRC_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
-const DEST_DIR = path.join(os.homedir(), '.config', 'nanoclaw');
-const DEST_FILE = path.join(DEST_DIR, 'claude-oauth.json');
-const ONECLI_PATH = path.join(os.homedir(), '.local', 'bin', 'onecli');
-
-export function syncOAuthCredentials(): void {
+export async function syncOAuthCredentials(): Promise<void> {
+  const srcFile = path.join(os.homedir(), '.claude', '.credentials.json');
+  const destDir = path.join(os.homedir(), '.config', 'nanoclaw');
+  const destFile = path.join(destDir, 'claude-oauth.json');
   try {
-    if (!fs.existsSync(SRC_FILE)) {
-      if (fs.existsSync(DEST_FILE)) {
+    if (!fs.existsSync(srcFile)) {
+      if (fs.existsSync(destFile)) {
         log.debug('Credentials file missing, using cached copy');
       } else {
         log.warn('No OAuth credentials available — cloud connectors will be unavailable');
@@ -40,32 +38,33 @@ export function syncOAuthCredentials(): void {
       return;
     }
 
-    const data = JSON.parse(fs.readFileSync(SRC_FILE, 'utf8')) as {
+    const data = JSON.parse(fs.readFileSync(srcFile, 'utf8')) as {
       claudeAiOauth?: { accessToken?: string; refreshToken?: string; scopes?: string[] };
     };
     const oauth = data.claudeAiOauth;
     if (!oauth?.accessToken || !oauth?.refreshToken || !oauth?.scopes) return;
 
-    fs.mkdirSync(DEST_DIR, { recursive: true });
-    fs.writeFileSync(DEST_FILE, JSON.stringify(data));
-    log.info('OAuth credentials synced from ~/.claude/.credentials.json');
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(destFile, JSON.stringify(data));
+    log.info('OAuth credentials synced');
 
-    syncToOneCli(oauth.accessToken);
-  } catch (err) {
-    log.warn('Failed to sync OAuth credentials', { err });
-  }
-}
-
-function syncToOneCli(accessToken: string): void {
-  if (!fs.existsSync(ONECLI_PATH)) return;
-  try {
-    const secretsRaw = execFileSync(ONECLI_PATH, ['secrets', 'list']).toString();
-    const secrets = JSON.parse(secretsRaw) as { data?: Array<{ id: string; type: string }> };
-    const anthropicSecret = secrets.data?.find((s) => s.type === 'anthropic');
-    if (!anthropicSecret?.id) return;
-    execFileSync(ONECLI_PATH, ['secrets', 'update', '--id', anthropicSecret.id, '--value', accessToken]);
-    log.info('OneCLI Anthropic secret synced');
-  } catch (err) {
-    log.warn('OneCLI secret sync failed', { err });
+    // Keep OneCLI's stored Anthropic credential in sync
+    try {
+      const secretsRaw = execFileSync('onecli', ['secrets', 'list']).toString();
+      const secrets = JSON.parse(secretsRaw) as { data?: Array<{ id: string; type: string }> };
+      const anthropicSecret = secrets.data?.find((s) => s.type === 'anthropic');
+      if (anthropicSecret?.id) {
+        execFileSync('onecli', ['secrets', 'update', '--id', anthropicSecret.id, '--value', oauth.accessToken]);
+        log.info('OneCLI Anthropic credential refreshed');
+      }
+    } catch {
+      log.debug('OneCLI credential refresh failed (non-critical)');
+    }
+  } catch {
+    if (fs.existsSync(destFile)) {
+      log.debug('Credentials sync failed, using cached copy');
+    } else {
+      log.warn('No OAuth credentials available — cloud connectors will be unavailable');
+    }
   }
 }
