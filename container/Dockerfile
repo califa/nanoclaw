@@ -26,6 +26,7 @@ ARG BUN_VERSION=1.3.12
 # bo-features: cloud connector MCP servers
 ARG GMAIL_MCP_VERSION=1.1.11
 ARG GCAL_MCP_VERSION=2.6.1
+ARG HASS_MCP_VERSION=1.3.1
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -122,12 +123,14 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
-# bo-features: Gmail + Google Calendar MCP servers. Pin zod-to-json-schema
-# to a pre-v3-subpath version (see /add-gmail-tool SKILL.md for why).
+# bo-features: Gmail + Google Calendar + Home Assistant MCP servers.
+# Pin zod-to-json-schema to a pre-v3-subpath version (see /add-gmail-tool
+# SKILL.md for why).
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g \
         "@gongrzhe/server-gmail-autoauth-mcp@${GMAIL_MCP_VERSION}" \
         "@cocal/google-calendar-mcp@${GCAL_MCP_VERSION}" \
+        "@jango-blockchained/homeassistant-mcp@${HASS_MCP_VERSION}" \
         "zod-to-json-schema@3.22.5"
 
 # ---- ncl CLI wrapper ----------------------------------------------------------

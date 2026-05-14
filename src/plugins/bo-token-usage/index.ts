@@ -1,13 +1,26 @@
 /**
  * bo-token-usage — host-side aggregator.
  *
- * The container-side capture lives in container/agent-runner/src/providers/
- * claude.ts: on every SDK `result` message, it appends a JSON record to
- * /workspace/usage.jsonl (which on the host is data/v2-sessions/<group>/<session>/usage.jsonl).
+ * Container-side capture lives in container/agent-runner/src/providers/
+ * claude.ts: on every SDK `result`, append a JSON record to
+ * /workspace/usage.jsonl (which on the host is
+ * data/v2-sessions/<group>/<session>/usage.jsonl).
  *
- * This plugin runs a periodic tail of every session's usage.jsonl, ingests
- * new lines into the central data/v2.db.token_usage table, and tracks the
- * read offset in a small state file per session so we don't re-ingest.
+ * This plugin:
+ *   1. Periodically tails every session's usage.jsonl.
+ *   2. Looks up the session in the central DB to get agent_group_id and
+ *      messaging_group_id (→ group_folder + chat_jid).
+ *   3. Inserts a row into the central `token_usage` table with both v2-style
+ *      columns (session_id, agent_group_id, model) AND v1-style columns
+ *      (timestamp, group_folder, chat_jid, source, total_cost_usd,
+ *      num_turns, duration_ms, duration_api_ms) so the user's dashboard at
+ *      :3002 keeps working with no SQL changes.
+ *   4. Updates `session_context` with the latest input_tokens snapshot
+ *      (= current context window size) so the dashboard can show context
+ *      pressure per active session.
+ *
+ * Per-session offset tracking lives in `.usage-ingested-offset` next to
+ * the JSONL so restarts don't re-ingest.
  */
 import fs from 'fs';
 import path from 'path';
@@ -16,7 +29,7 @@ import { DATA_DIR } from '../../config.js';
 import { log } from '../../log.js';
 
 const SESSIONS_DIR = path.join(DATA_DIR, 'v2-sessions');
-const POLL_INTERVAL_MS = 60_000; // 60s — token usage isn't latency-critical
+const POLL_INTERVAL_MS = 60_000;
 
 interface UsageRecord {
   ts: string;
@@ -28,6 +41,8 @@ interface UsageRecord {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   total_cost_usd?: number;
+  duration_ms?: number;
+  duration_api_ms?: number;
 }
 
 let pollTimer: NodeJS.Timeout | null = null;
@@ -45,6 +60,38 @@ function listSessionDirs(): Array<{ agentGroupId: string; sessionId: string; ses
     }
   }
   return result;
+}
+
+interface SessionMeta {
+  agent_group_id: string;
+  group_folder: string;
+  chat_jid: string | null;
+}
+
+const metaCache = new Map<string, SessionMeta>();
+
+function getSessionMeta(sessionId: string): SessionMeta | null {
+  if (metaCache.has(sessionId)) return metaCache.get(sessionId)!;
+  const row = getDb()
+    .prepare(
+      `SELECT s.agent_group_id, ag.folder AS group_folder,
+              mg.channel_type, mg.platform_id
+       FROM sessions s
+       JOIN agent_groups ag ON ag.id = s.agent_group_id
+       LEFT JOIN messaging_groups mg ON mg.id = s.messaging_group_id
+       WHERE s.id = ?`,
+    )
+    .get(sessionId) as
+    | { agent_group_id: string; group_folder: string; channel_type: string | null; platform_id: string | null }
+    | undefined;
+  if (!row) return null;
+  const meta: SessionMeta = {
+    agent_group_id: row.agent_group_id,
+    group_folder: row.group_folder,
+    chat_jid: row.channel_type && row.platform_id ? `${row.channel_type}:${row.platform_id}` : null,
+  };
+  metaCache.set(sessionId, meta);
+  return meta;
 }
 
 function readOffset(stateFile: string): number {
@@ -79,9 +126,36 @@ async function ingestSession(s: { agentGroupId: string; sessionId: string; sessi
       .split('\n')
       .filter((l) => l.trim());
 
+    const meta = getSessionMeta(s.sessionId);
+
     const insert = getDb().prepare(
-      `INSERT INTO token_usage (session_id, agent_group_id, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, ts)
-       VALUES (@session_id, @agent_group_id, @model, @input_tokens, @output_tokens, @cache_creation_tokens, @cache_read_tokens, @ts)`,
+      `INSERT INTO token_usage (
+         session_id, agent_group_id, model,
+         input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, ts,
+         timestamp, group_folder, chat_jid, source,
+         total_cost_usd, num_turns, duration_ms, duration_api_ms
+       ) VALUES (
+         @session_id, @agent_group_id, @model,
+         @input_tokens, @output_tokens, @cache_creation_tokens, @cache_read_tokens, @ts,
+         @timestamp, @group_folder, @chat_jid, @source,
+         @total_cost_usd, @num_turns, @duration_ms, @duration_api_ms
+       )`,
+    );
+
+    const upsertContext = getDb().prepare(
+      `INSERT INTO session_context (
+         session_id, agent_group_id, group_folder, input_tokens,
+         cache_read_tokens, cache_creation_tokens, model, updated_at
+       ) VALUES (
+         @session_id, @agent_group_id, @group_folder, @input_tokens,
+         @cache_read_tokens, @cache_creation_tokens, @model, @updated_at
+       )
+       ON CONFLICT(session_id) DO UPDATE SET
+         input_tokens = excluded.input_tokens,
+         cache_read_tokens = excluded.cache_read_tokens,
+         cache_creation_tokens = excluded.cache_creation_tokens,
+         model = excluded.model,
+         updated_at = excluded.updated_at`,
     );
 
     let inserted = 0;
@@ -90,13 +164,31 @@ async function ingestSession(s: { agentGroupId: string; sessionId: string; sessi
         const rec = JSON.parse(line) as UsageRecord;
         insert.run({
           session_id: s.sessionId,
-          agent_group_id: s.agentGroupId,
+          agent_group_id: meta?.agent_group_id ?? s.agentGroupId,
           model: rec.model ?? 'unknown',
           input_tokens: rec.input_tokens,
           output_tokens: rec.output_tokens,
           cache_creation_tokens: rec.cache_creation_tokens,
           cache_read_tokens: rec.cache_read_tokens,
           ts: rec.ts,
+          timestamp: rec.ts,
+          group_folder: meta?.group_folder ?? s.agentGroupId,
+          chat_jid: meta?.chat_jid ?? null,
+          source: `agent:${s.sessionId.slice(0, 12)}`,
+          total_cost_usd: rec.total_cost_usd ?? 0,
+          num_turns: rec.num_turns ?? 0,
+          duration_ms: rec.duration_ms ?? 0,
+          duration_api_ms: rec.duration_api_ms ?? 0,
+        });
+        upsertContext.run({
+          session_id: s.sessionId,
+          agent_group_id: meta?.agent_group_id ?? s.agentGroupId,
+          group_folder: meta?.group_folder ?? s.agentGroupId,
+          input_tokens: rec.input_tokens,
+          cache_read_tokens: rec.cache_read_tokens,
+          cache_creation_tokens: rec.cache_creation_tokens,
+          model: rec.model ?? null,
+          updated_at: rec.ts,
         });
         inserted++;
       } catch (err) {
@@ -127,15 +219,10 @@ async function pollOnce(): Promise<void> {
 }
 
 export default async function init(): Promise<void> {
-  // Run once at startup to catch up on any pre-existing usage files.
   void pollOnce().catch((err) => log.error('bo-token-usage: initial poll failed', { err }));
-
-  // Then poll on an interval.
   pollTimer = setInterval(() => {
     void pollOnce().catch((err) => log.error('bo-token-usage: poll failed', { err }));
   }, POLL_INTERVAL_MS);
-  // Don't keep the event loop alive purely for the poll timer.
   pollTimer.unref?.();
-
   log.info('bo-token-usage: ingester started', { pollIntervalMs: POLL_INTERVAL_MS, sessionsDir: SESSIONS_DIR });
 }

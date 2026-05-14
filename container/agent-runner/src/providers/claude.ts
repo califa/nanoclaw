@@ -337,17 +337,21 @@ export class ClaudeProvider implements AgentProvider {
             const model = (message as { model?: string }).model;
             const sessionId = (message as { session_id?: string }).session_id;
             const numTurns = (message as { num_turns?: number }).num_turns;
+            const durationMs = (message as { duration_ms?: number }).duration_ms;
+            const durationApiMs = (message as { duration_api_ms?: number }).duration_api_ms;
             if (usage) {
               const record = {
                 ts: new Date().toISOString(),
                 sdk_session_id: sessionId,
                 model,
-                num_turns: numTurns,
+                num_turns: numTurns ?? 0,
                 input_tokens: usage.input_tokens ?? 0,
                 output_tokens: usage.output_tokens ?? 0,
                 cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
                 cache_read_tokens: usage.cache_read_input_tokens ?? 0,
                 total_cost_usd: cost ?? 0,
+                duration_ms: durationMs ?? 0,
+                duration_api_ms: durationApiMs ?? 0,
               };
               fs.appendFileSync('/workspace/usage.jsonl', JSON.stringify(record) + '\n');
             }
