@@ -76,24 +76,67 @@ Pick the most-specific target. A correction about a specific project goes
 under the project page, not in bo-mistakes. A formatting rule goes in
 bo-mistakes. A statement about Joel's daily routine goes in joel.md.
 
+## How to actually write (the only mechanism that works)
+
+**Emit a `<memory-write>` tag in your reply.** The host plugin
+`bo-memory-write` parses the tag, writes the body to the resolved file
+under `/Users/joel/Brain/xtra/wiki/`, and **strips the tag from the
+user-visible reply** so it doesn't appear in Slack.
+
+If you just say "Done, noted" in your reply without emitting the tag,
+**nothing is persisted**. The user will think you saved a rule but the
+next turn (and the next reviewer call, and every future container) won't
+have it. Don't do that.
+
+### Exact syntax (copy this exactly)
+
+```
+<memory-write target="wiki/personal/bo-mistakes.md" mode="append">
+## <short-rule-slug>
+Rule: <one-sentence rule the reviewer can check against>
+Why: <YYYY-MM-DD> — <what triggered this; quote Joel if relevant>
+Example: bad: "<short bad quote>" good: "<short good quote>"
+</memory-write>
+```
+
+`target` paths are relative to the wiki root. The plugin rejects anything
+that resolves outside `/Users/joel/Brain/xtra/wiki/`.
+
+`mode="append"` adds the body to the end of the file (creates the file
+if missing). `mode="replace-section" section="<name>"` replaces the
+existing `## <name>` block with the new body — use this when correcting
+or updating an existing rule.
+
+### Worked example
+
+User: "stop using ** in slack, single asterisks only."
+
+Your reply text → "Got it, switching to single asterisks going forward."
+
+Your reply ALSO includes (these are stripped from what the user sees):
+
+```
+<memory-write target="wiki/personal/bo-mistakes.md" mode="append">
+## slack-single-asterisks
+Rule: Slack bold must use single asterisks, never double.
+Why: 2026-05-14 — used `**bold**` in a reply; Joel: "stop using ** in slack, single asterisks only."
+Example: bad: `**hello**` good: `*hello*`
+</memory-write>
+```
+
+Result: the bo-mistakes.md file gets the new rule appended; the adversarial
+reviewer reads it on every subsequent qualifying Slack send. The rule
+sticks.
+
 ## Format for `bo-mistakes.md` entries
 
-The reviewer reads this file. Keep entries scannable.
+The reviewer reads this file. Keep entries scannable. The exact shape:
 
 ```markdown
 ## <short rule slug>
 Rule: <one-sentence rule the reviewer can check against>
 Why: <date> — <one-sentence what happened that triggered this>
 Example: bad: "<short bad quote>" good: "<short good quote>"
-```
-
-Example:
-
-```markdown
-## fact-attribution-people
-Rule: Don't claim a specific person is leading or running a project without a direct citation.
-Why: 2026-04-15 — claimed Sarah was leading Q3 launch based on context inference; she wasn't. Joel: "you're making things up."
-Example: bad: "Sarah is leading Q3." good: "Per Q2 planning notes, Sarah is on the Q3 team; lead is unconfirmed."
 ```
 
 ## Format for `feedback.md` entries

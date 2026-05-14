@@ -103,7 +103,7 @@ Static rules (always apply):
 - No \`##\` or \`#\` markdown headers — use \`*Bold text*\`.
 - No \`[text](url)\` links — use \`<url|text>\`.
 - No \`- \` bullets — use \`•\`.
-- No raw markdown tables — use a Slack Canvas.
+- Markdown tables (\`| col | col |\`) are fine — Slack renders them.
 - Task-review-style messages should be Block Kit, not raw text.
 
 Factual discipline:

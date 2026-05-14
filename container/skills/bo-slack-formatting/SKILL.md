@@ -18,7 +18,8 @@ the canonical reference both the reviewer and Bo read from.
 | `##` or `#` headers | `*Bold text*` |
 | `[text](url)` | `<url\|text>` |
 | `- ` bullet | `•` |
-| `\| ` or ` \|` (tables) | Use a Canvas |
+
+Markdown tables (`\| col \| col \|`) render fine in Slack — feel free to use them.
 
 If any of these patterns appear in the proposed message, fix before sending.
 No exceptions.
