@@ -28,6 +28,8 @@ ARG GMAIL_MCP_VERSION=1.1.11
 ARG GCAL_MCP_VERSION=2.6.1
 ARG HASS_MCP_VERSION=1.3.1
 ARG N8N_MCP_VERSION=2.51.3
+ARG NOTION_MCP_VERSION=2.2.1
+ARG LINEAR_MCP_VERSION=1.1.2
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -133,6 +135,8 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
         "@cocal/google-calendar-mcp@${GCAL_MCP_VERSION}" \
         "@jango-blockchained/homeassistant-mcp@${HASS_MCP_VERSION}" \
         "n8n-mcp@${N8N_MCP_VERSION}" \
+        "@notionhq/notion-mcp-server@${NOTION_MCP_VERSION}" \
+        "@tacticlaunch/mcp-linear@${LINEAR_MCP_VERSION}" \
         "zod-to-json-schema@3.22.5"
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
