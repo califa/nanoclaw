@@ -65,6 +65,7 @@ import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from 
 import { startHeliumApi } from './helium-api.js';
 import { loadPlugins } from './plugin-loader.js';
 import { runBoMigrations } from './migration-runner.js';
+import { syncOAuthCredentials } from './oauth-sync.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -74,6 +75,13 @@ async function main(): Promise<void> {
 
   // 0. Circuit breaker — backoff on rapid restarts
   await enforceStartupBackoff();
+
+  // 0a. Sync Claude OAuth credentials → ~/.config/nanoclaw/claude-oauth.json
+  // before anything else needs them. Containers read from this cached copy
+  // (see container-runner.ts), so it must exist before the first spawn.
+  // The refresher launchd job (com.claude.token-refresh) keeps it current
+  // every 5 minutes; this run handles startup + post-restart hot-paths.
+  syncOAuthCredentials();
 
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');

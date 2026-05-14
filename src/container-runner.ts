@@ -256,17 +256,38 @@ function buildMounts(
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   syncSkillSymlinks(claudeDir, containerConfig);
 
-  // bo-features: copy the user's full-scope Claude Code credentials into the
+  // bo-features: copy the cached full-scope Claude Code credentials into the
   // per-group .claude/ dir so the agent SDK can load cloud MCP connectors
   // (Notion, Linear, GCal, Gmail, Slack, Figma, etc.) that the user has
-  // enabled on claude.ai. The credentials file must have user:mcp_servers
-  // scope — newer Claude Code keeps it at ~/.claude/.credentials.json
-  // (v1 was extracting from macOS keychain; not needed anymore).
+  // enabled on claude.ai.
+  //
+  // CRITICAL: read from the cached ~/.config/nanoclaw/claude-oauth.json, NOT
+  // from ~/.claude/.credentials.json directly. The Claude CLI sometimes
+  // transiently deletes/replaces its own .credentials.json (during refresh
+  // races, login flows, etc.). If we read from the canonical file and it's
+  // mid-rewrite or absent, containers spawn with no creds and Bo "logs out".
+  //
+  // The cached copy is written by:
+  //   - The refresher cron (scripts/refresh-oauth.mjs, every 5min) — keeps
+  //     the cache current with rotated tokens
+  //   - The host on startup (syncOAuthCredentials in src/index.ts)
+  // Both treat ~/.claude/.credentials.json as source-of-truth and only
+  // UPDATE the cache when the canonical file is present + valid. Result:
+  // a transient deletion never empties the cache. v1 pattern; do not
+  // change without testing through a `claude auth logout` cycle.
   try {
-    const hostCreds = path.join(process.env.HOME ?? '', '.claude', '.credentials.json');
-    if (fs.existsSync(hostCreds)) {
+    const cachedCreds = path.join(process.env.HOME ?? '', '.config', 'nanoclaw', 'claude-oauth.json');
+    if (fs.existsSync(cachedCreds)) {
       fs.mkdirSync(claudeDir, { recursive: true });
-      fs.copyFileSync(hostCreds, path.join(claudeDir, '.credentials.json'));
+      fs.copyFileSync(cachedCreds, path.join(claudeDir, '.credentials.json'));
+    } else {
+      // First-boot fallback only: if the cache hasn't been written yet, read
+      // from the canonical file. After this runs once the cache will exist.
+      const hostCreds = path.join(process.env.HOME ?? '', '.claude', '.credentials.json');
+      if (fs.existsSync(hostCreds)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+        fs.copyFileSync(hostCreds, path.join(claudeDir, '.credentials.json'));
+      }
     }
   } catch (err) {
     log.warn('Failed to sync Claude OAuth credentials into container', { err });
