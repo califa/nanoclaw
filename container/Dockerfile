@@ -27,6 +27,7 @@ ARG BUN_VERSION=1.3.12
 ARG GMAIL_MCP_VERSION=1.1.11
 ARG GCAL_MCP_VERSION=2.6.1
 ARG HASS_MCP_VERSION=1.3.1
+ARG N8N_MCP_VERSION=2.51.3
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -131,6 +132,7 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
         "@gongrzhe/server-gmail-autoauth-mcp@${GMAIL_MCP_VERSION}" \
         "@cocal/google-calendar-mcp@${GCAL_MCP_VERSION}" \
         "@jango-blockchained/homeassistant-mcp@${HASS_MCP_VERSION}" \
+        "n8n-mcp@${N8N_MCP_VERSION}" \
         "zod-to-json-schema@3.22.5"
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
