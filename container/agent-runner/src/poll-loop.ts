@@ -1,5 +1,5 @@
 import { materializeAttachments } from './attachments.js';
-import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
+import { findByName, findByRouting, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
@@ -483,6 +483,20 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
 
   const hasUnwrapped = sent === 0 && !!scratchpad;
   if (hasUnwrapped) {
+    // Fallback: v1 always delivered the agent's final text to the inbound's
+    // origin destination without requiring `<message to="…">` wrapping. Models
+    // trained for conversational replies frequently emit bare text — silently
+    // dropping it (the prior v2 behavior) made Bo look like he was typing but
+    // never responding. Auto-route to the origin destination when we can resolve
+    // one. Keep the "no origin" branch noisy so admins notice misconfigurations.
+    const originDest = findByRouting(routing.channelType, routing.platformId);
+    if (originDest) {
+      log(
+        `Agent emitted bare text — falling back to origin destination "${originDest.name}" (${scratchpad.length} chars)`,
+      );
+      sendToDestination(originDest, scratchpad.trim(), routing);
+      return { sent: 1, hasUnwrapped: false };
+    }
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
   return { sent, hasUnwrapped };
