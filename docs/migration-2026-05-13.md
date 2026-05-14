@@ -108,8 +108,108 @@ v1 used Slack socket mode (app token). v2's `@chat-adapter/slack` is webhook-onl
 
 To configure in Slack: api.slack.com/apps → app → Event Subscriptions → paste Request URL → Verify. Then under *Subscribe to bot events* add `message.channels`, `message.groups`, `message.im`, `app_mention`. Save.
 
+## bo-features — Joel's customizations
+
+Upgrade-safe layer on top of trunk. Trunk got a one-time extension-points patch (`src/extension-points.ts`, `src/plugin-loader.ts`, three call sites in router/delivery/index). Everything else lives on the `bo-features` sibling branch and installs via `/add-bo-features`.
+
+### Trunk patch (commit `621bb8e`)
+
+| File | Change |
+|---|---|
+| `src/extension-points.ts` (new) | Three registries: inbound transformers, outbound transformers, scheduler signal handlers. Plus a permissive `parseSchedulerSignals` parser |
+| `src/plugin-loader.ts` (new) | Auto-loads `src/plugins/*/index.js` at boot, runs each module's default export |
+| `src/router.ts` | Calls `runInboundTransformers` at top of `routeInbound` |
+| `src/delivery.ts` | Parses + dispatches scheduler signals before delivering messages |
+| `src/index.ts` | Calls `loadPlugins()` after channels init |
+
+Plus restored `scripts/obsidian-bridge.mjs` (was missing after the dir rename).
+
+### bo-features branch (commit `09702d4`)
+
+Contents (installed into main via commit `42879a4`):
+
+**Plugins** (host-side, registered at boot):
+
+| Plugin | Status | What it does |
+|---|---|---|
+| `bo-voice` | ✅ functional (needs `WHISPER_API_KEY` in `.env`) | Inbound transformer: audio → Whisper API → `[Voice transcribed: ...]` |
+| `bo-scheduler-tags` | ⚠️ partial — see docstring | Signal handlers for `<retry>`/`<healed>`/`<no-fix>`. Registered + log calls work; state mutation deferred because v2 stores scheduling in per-session `messages_in`, not a global `scheduled_tasks` table |
+| `bo-token-usage` | 📋 scaffold | Real hook needs container-side wrap of the Anthropic SDK call |
+| `bo-attachments` | 📋 scaffold | Image/PDF passthrough — needs adapter introspection + `messages_in.attachments` column |
+| `bo-telegram-reply-context` | 📋 scaffold | Pull `reply_to_message` from Telegram updates |
+
+**Container skills** (loaded into agent runtime):
+
+| Skill | What it does |
+|---|---|
+| `bo-slack-formatting` | Pre-send checklist + Block Kit task review canonical format |
+| `bo-tags` | Documents `<retry>`/`<healed>`/`<no-fix>`/`<memory-write>` protocol |
+| `bo-adversarial-reviewer` | **Bo invokes TeamCreate critic before every qualifying Slack send. Loads `wiki/personal/bo-mistakes.md` as dynamic rules. Compounds: every correction Joel makes becomes a rule the reviewer enforces next time.** |
+| `bo-self-learning` | Capture/distill/store loop for corrections. Writes to `bo-mistakes.md` (reviewer reads) and `feedback.md` (general behavior) |
+| `bo-llm-wiki` | Karpathy LLM Wiki conventions matched to existing `Brain/xtra/wiki/` structure |
+
+**Migrations** (applied 2026-05-13):
+
+| Migration | Effect |
+|---|---|
+| `bo-001-scheduled-task-retry` | Adds retry tracking cols to `scheduled_tasks` — skipped because v2 doesn't have that table |
+| `bo-002-token-usage` | Created `token_usage(id, session_id, agent_group_id, model, input_tokens, output_tokens, cache_*, ts)` ✅ |
+
+### Install lifecycle
+
+```bash
+# Future upstream merges:
+/update-nanoclaw          # merges upstream/main — no conflicts on bo-features files
+# If trunk has new files we want, no action needed; if extension-points
+# changed signature, fix in bo-features and re-install:
+/add-bo-features          # idempotent re-install from bo-features branch
+```
+
+## MCP servers wired into slack_main
+
+```bash
+GROUP=ag-1778700843188-qio5e7
+# v1 message history (read-only)
+ncl groups config add-mcp-server --id $GROUP --name v1-history \
+  --command npx --args '["-y","mcp-sqlite","/workspace/extra/v1-history/messages.db"]'
+# Obsidian vault filesystem ops
+ncl groups config add-mcp-server --id $GROUP --name brain-fs \
+  --command npx --args '["-y","@modelcontextprotocol/server-filesystem","/workspace/extra/brain"]'
+# Home Assistant (community Python via uvx)
+ncl groups config add-mcp-server --id $GROUP --name homeassistant \
+  --command uvx --args '["home-assistant-mcp"]'
+```
+
+Plus `additional_mounts` extended with `/Users/joel/nanoclaw-v1-legacy/store → /workspace/extra/v1-history` (read-only) so the SQLite MCP server can reach the v1 message DB.
+
+## Obsidian bridge — restored
+
+Previously broken since the directory rename. v1's `scripts/obsidian-bridge.mjs` (83 lines) copied verbatim into v2's `scripts/`. The existing `~/Library/LaunchAgents/com.nanoclaw.obsidian-bridge.plist` was already pointing at the now-correct path — kickstart was all it needed.
+
+Bridge listens on port 27999. Endpoints: `GET /health`, `POST /run` with `{args: string[]}`. Allowlist: `tasks`, `task`, `read`, `create`, `search`, `files`, `move`, `daily:append`, `property:set`, `sync:history`. Calls `/usr/local/bin/obsidian` (Homebrew → Obsidian.app), which requires the desktop app to be running — that's why the bridge is on-host, not in-container.
+
 ## Outstanding / TODO
 
-- **WEBHOOK_PORT in plist**: if `/setup` regenerates the plist, re-add the `WEBHOOK_PORT=3030` `EnvironmentVariables` entry.
-- **Orphan `groups/main/` folder**: leftover from v1; left in place per user choice.
-- **Slack app Event Subscriptions**: paste the Request URL above and add the four bot events. Slack will send a `url_verification` challenge — v2 responds correctly.
+### Skills not auto-installed (interactive, run manually when ready)
+- `/add-mnemon` — graph-based persistent memory (modifies Dockerfile + entrypoint)
+- `/add-ollama-tool` — Ollama MCP for local model offload
+- `/add-dashboard` — `@nanoco/nanoclaw-dashboard` monitoring with token usage panel
+- Skipping `/add-karpathy-llm-wiki` — your existing wiki at `Brain/xtra/wiki/` already follows the pattern; `bo-llm-wiki` container skill documents it
+
+### Cloud connectors still needing OneCLI OAuth + wiring
+- `/add-gmail-tool` (stub pattern via `@gongrzhe/server-gmail-autoauth-mcp`)
+- `/add-gcal-tool` (stub pattern via `@cocal/google-calendar-mcp`)
+- Notion / Linear / Slack MCP servers — exist in community ecosystem; need wiring per group
+
+### Plugin work to finish
+- `bo-scheduler-tags`: adapt to v2's per-session `messages_in` scheduling model (currently no-op on real signals)
+- `bo-token-usage`: container-side SDK wrap + per-session usage.db + host aggregator
+- `bo-attachments`: `messages_in.attachments` column + adapter integration + container-side native content block forwarding
+- `bo-telegram-reply-context`: introspect `@chat-adapter/telegram` for `reply_to_message`
+- Migration runner for the `migrations/` directory (currently applied manually)
+
+### Other deferred
+- **WEBHOOK_PORT in plist**: re-add `WEBHOOK_PORT=3030` if `/setup` regenerates the plist
+- **Orphan `groups/main/` folder**: leftover; harmless
+- **Slack app Event Subscriptions**: paste `https://mini.tail4b9e08.ts.net/webhook/slack` Request URL when revisiting Slack config
+- **Cross-channel task queue verification**: ran into the per-session `messages_in` model — formal test deferred
