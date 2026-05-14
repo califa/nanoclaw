@@ -273,6 +273,29 @@ async function deliverMessage(
     }
   }
 
+  // Plugin-registered outbound transformers — fire on every message before
+  // routing/delivery. Plugins use this for gates (e.g. adversarial-reviewer
+  // enforcement), formatting tweaks, or to drop messages entirely.
+  {
+    const { runOutboundTransformers } = await import('./extension-points.js');
+    const shaped = {
+      sessionId: session.id,
+      channelType: msg.channel_type ?? '',
+      platformId: msg.platform_id ?? '',
+      threadId: msg.thread_id,
+      kind: msg.kind,
+      content: msg.content,
+    };
+    const transformed = await runOutboundTransformers(shaped);
+    if (transformed === null) {
+      log.info('Outbound transformer dropped message', { id: msg.id });
+      return;
+    }
+    msg.content = transformed.content;
+    // Re-parse content for downstream code that expects the local var.
+    Object.assign(content, JSON.parse(msg.content));
+  }
+
   // System actions — handle internally (schedule_task, cancel_task, etc.)
   if (msg.kind === 'system') {
     await handleSystemAction(content, session, inDb);

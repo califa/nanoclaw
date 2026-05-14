@@ -65,6 +65,7 @@ import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from 
 import { startHeliumApi } from './helium-api.js';
 import { loadPlugins } from './plugin-loader.js';
 import { runBoMigrations } from './migration-runner.js';
+import { readEnvFile } from './env.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -198,6 +199,24 @@ async function main(): Promise<void> {
   //    /add-bo-features skill. The loader is no-op when src/plugins/
   //    doesn't exist.
   await loadPlugins();
+
+  // 10. Dashboard (optional, gated by DASHBOARD_SECRET).
+  const dashboardEnv = readEnvFile(['DASHBOARD_SECRET', 'DASHBOARD_PORT']);
+  const dashboardSecret = process.env.DASHBOARD_SECRET || dashboardEnv.DASHBOARD_SECRET;
+  const dashboardPort = parseInt(process.env.DASHBOARD_PORT || dashboardEnv.DASHBOARD_PORT || '3100', 10);
+  if (dashboardSecret) {
+    try {
+      const { startDashboard } = await import('@nanoco/nanoclaw-dashboard');
+      const { startDashboardPusher } = await import('./dashboard-pusher.js');
+      startDashboard({ port: dashboardPort, secret: dashboardSecret });
+      startDashboardPusher({ port: dashboardPort, secret: dashboardSecret, intervalMs: 60000 });
+      log.info('Dashboard started', { port: dashboardPort });
+    } catch (err) {
+      log.warn('Dashboard failed to start', { err });
+    }
+  } else {
+    log.info('Dashboard disabled (no DASHBOARD_SECRET)');
+  }
 
   log.info('NanoClaw running');
 }

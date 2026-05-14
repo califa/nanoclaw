@@ -328,6 +328,32 @@ export class ClaudeProvider implements AgentProvider {
           yield { type: 'init', continuation: message.session_id };
         } else if (message.type === 'result') {
           const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
+          // bo-features: write token usage record per turn. Host-side
+          // aggregator (src/plugins/bo-token-usage/index.ts) tails the file
+          // and ingests into the central token_usage table.
+          try {
+            const usage = (message as { usage?: Record<string, number> }).usage;
+            const cost = (message as { total_cost_usd?: number }).total_cost_usd;
+            const model = (message as { model?: string }).model;
+            const sessionId = (message as { session_id?: string }).session_id;
+            const numTurns = (message as { num_turns?: number }).num_turns;
+            if (usage) {
+              const record = {
+                ts: new Date().toISOString(),
+                sdk_session_id: sessionId,
+                model,
+                num_turns: numTurns,
+                input_tokens: usage.input_tokens ?? 0,
+                output_tokens: usage.output_tokens ?? 0,
+                cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
+                cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+                total_cost_usd: cost ?? 0,
+              };
+              fs.appendFileSync('/workspace/usage.jsonl', JSON.stringify(record) + '\n');
+            }
+          } catch (err) {
+            log(`Failed to write usage record: ${err instanceof Error ? err.message : String(err)}`);
+          }
           yield { type: 'result', text };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
