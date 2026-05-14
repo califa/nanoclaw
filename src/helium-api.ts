@@ -620,8 +620,7 @@ export function startHeliumApi(): http.Server {
         // (populated by bo-token-usage plugin). Kuma monitor #34 hits this.
       } else if (method === 'GET' && url.pathname === '/usage') {
         const period = url.searchParams.get('period') || '24h';
-        const sinceMs =
-          period === '7d' ? 7 * 86400000 : period === '30d' ? 30 * 86400000 : 86400000;
+        const sinceMs = period === '7d' ? 7 * 86400000 : period === '30d' ? 30 * 86400000 : 86400000;
         const since = new Date(Date.now() - sinceMs).toISOString();
         try {
           const Database = (await import('better-sqlite3')).default;
