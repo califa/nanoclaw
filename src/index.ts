@@ -65,7 +65,7 @@ import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from 
 import { startHeliumApi } from './helium-api.js';
 import { loadPlugins } from './plugin-loader.js';
 import { runBoMigrations } from './migration-runner.js';
-import { syncOAuthCredentials } from './oauth-sync.js';
+import { syncOAuthCredentials, startOAuthFileWatcher } from './oauth-sync.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -89,6 +89,13 @@ async function main(): Promise<void> {
     () => syncOAuthCredentials().catch((err) => log.warn('Periodic OAuth sync failed', { err })),
     45 * 60 * 1000,
   ).unref?.();
+  // fs.watch on ~/.claude/.credentials.json → instant sync to cache + OneCLI
+  // whenever Claude CLI (interactive `claude`, in-container claude-code SDK,
+  // any other consumer) rewrites or deletes the file. Closes the up-to-
+  // 45-minute staleness window where OneCLI's stored Anthropic credential
+  // would otherwise lag behind Claude CLI's own refresh, causing 401s on
+  // the gateway path.
+  startOAuthFileWatcher();
 
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');

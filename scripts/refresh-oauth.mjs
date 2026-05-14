@@ -92,81 +92,37 @@ function syncCredentials(raw) {
   }
 }
 
-/**
- * Direct HTTP OAuth refresh. Handles token rotation by saving new refresh_token.
- * Returns true on success, false on failure.
- */
-async function httpRefresh(refreshToken) {
-  return new Promise((resolve) => {
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: OAUTH_CLIENT_ID,
-    }).toString();
-
-    const url = new URL(OAUTH_TOKEN_URL);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'User-Agent': 'claude-cli/1.0',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    };
-
-    const req = request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          log(`HTTP refresh failed: ${res.statusCode} ${data.slice(0, 200)}`);
-          resolve(false);
-          return;
-        }
-        try {
-          const result = JSON.parse(data);
-          if (!result.access_token || !result.refresh_token) {
-            log(`HTTP refresh: unexpected response shape`);
-            resolve(false);
-            return;
-          }
-
-          const raw = existsSync(CREDENTIALS_FILE)
-            ? JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf8'))
-            : {};
-
-          const expiresAt = Date.now() + result.expires_in * 1000;
-          if (!raw.claudeAiOauth) raw.claudeAiOauth = {};
-          raw.claudeAiOauth.accessToken = result.access_token;
-          raw.claudeAiOauth.refreshToken = result.refresh_token;
-          raw.claudeAiOauth.expiresAt = expiresAt;
-
-          writeFileSync(CREDENTIALS_FILE, JSON.stringify(raw));
-          log(`HTTP refresh succeeded — new expiry in ${Math.round(result.expires_in / 60)} min`);
-          syncCredentials(raw);
-          resolve(true);
-        } catch (err) {
-          log(`HTTP refresh parse error: ${err.message}`);
-          resolve(false);
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      log(`HTTP refresh network error: ${err.message}`);
-      resolve(false);
-    });
-
-    req.write(body);
-    req.end();
-  });
-}
+// (Previously: direct HTTP refresh against /v1/oauth/token. Removed —
+// turned this script into a refresh racer competing with Claude CLI and
+// every long-running Claude SDK session. Now we only invoke `claude
+// --print` to trigger a refresh, so Claude is the single OAuth client.)
 
 try {
-  const before = getTokenState();
+  let before = getTokenState();
+
+  if (!before.accessToken) {
+    // Self-heal: canonical credentials file is missing. If our cache still
+    // has a valid blob, restore canonical from it. The cached refresh token
+    // may have been rotated by another process, but at least Claude CLI +
+    // Bo's containers + OneCLI gateway will see SOMETHING usable until the
+    // user manually re-logs in. This is the v2-specific failure mode that
+    // took down Bo for 5+ hours earlier today.
+    if (existsSync(NANOCLAW_OAUTH_FILE)) {
+      try {
+        const cacheRaw = JSON.parse(readFileSync(NANOCLAW_OAUTH_FILE, 'utf8'));
+        const cacheOauth = cacheRaw?.claudeAiOauth;
+        if (cacheOauth?.accessToken && cacheOauth?.refreshToken) {
+          mkdirSync(join(process.env.HOME, '.claude'), { recursive: true });
+          writeFileSync(CREDENTIALS_FILE, JSON.stringify(cacheRaw), { mode: 0o600 });
+          log(`Canonical credentials file was missing — restored from cache`);
+          // Re-read state from restored file
+          before = getTokenState();
+        }
+      } catch (err) {
+        log(`Cache restore failed: ${err.message || err}`);
+      }
+    }
+  }
 
   if (!before.accessToken) {
     log('No OAuth credentials found — run: claude auth login');
@@ -200,46 +156,33 @@ try {
     process.exit(0);
   }
 
-  // Anti-race guard: Claude Code CLI also refreshes lazily when it sees a
-  // near-expired token, and Anthropic's refresh tokens are single-use
-  // (rotate on use). If we refresh here while another Claude Code process
-  // is also refreshing, one of them gets a 401. If the canonical file was
-  // touched in the last 60 seconds, assume another process just refreshed
-  // it — skip our own refresh, just resync the cache. This matches v1's
-  // working behavior in practice (v1 wasn't a Claude Code consumer so the
-  // race didn't manifest; v2 + interactive Claude Code on the host = race
-  // surface exists).
-  try {
-    const stat = (await import('fs')).statSync(CREDENTIALS_FILE);
-    const mtimeAgeMs = Date.now() - stat.mtimeMs;
-    if (mtimeAgeMs < 60_000) {
-      log(`Token expires in ${minRemaining} min, but canonical file was touched ${Math.round(mtimeAgeMs / 1000)}s ago — skipping refresh, syncing cache only`);
-      syncCredentials(before.raw);
-      process.exit(0);
-    }
-  } catch {
-    /* fall through to refresh */
-  }
-
-  // Within refresh window or expired — attempt HTTP refresh first, then CLI fallback.
+  // ──────────────────────────────────────────────────────────────────────
+  // Within refresh window or expired.
+  //
+  // Anthropic refresh tokens are SINGLE-USE — they rotate on every refresh.
+  // Multiple Claude clients share ~/.claude/.credentials.json but each
+  // holds its own copy of the refresh token IN MEMORY. When one rotates,
+  // all others' in-memory copies become invalid. The losers' next request
+  // 401s → Claude CLI deletes credentials → everyone is logged out.
+  //
+  // Active racers on this host: interactive `claude`, my Claude Code
+  // session(s), each long-running Bo container's Claude SDK, and (until
+  // now) this refresher's own HTTP refresh.
+  //
+  // Fix: stop being a racer. NEVER call /v1/oauth/token ourselves.
+  // ALWAYS use `claude --print` to trigger a refresh — it runs as a fresh
+  // process that re-reads the file, refreshes, writes the new token, and
+  // exits. The fs.watch in v2 host catches the file write and syncs to
+  // cache + OneCLI immediately.
   if (msUntilExpiry <= 0) {
-    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — attempting HTTP refresh`);
+    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — invoking claude CLI to refresh`);
   } else {
-    log(`Token expires in ${minRemaining} min — attempting HTTP refresh`);
+    log(`Token expires in ${minRemaining} min — invoking claude CLI to refresh`);
   }
 
-  if (before.hasRefreshToken) {
-    const ok = await httpRefresh(before.refreshToken);
-    if (ok) {
-      if (existsSync(AUTH_EXPIRED_FLAG)) unlinkSync(AUTH_EXPIRED_FLAG);
-      process.exit(0);
-    }
-    log('HTTP refresh failed — falling back to claude --print');
-  } else {
-    log('No refresh token available — falling back to claude --print');
-  }
-
-  // CLI fallback
+  // claude --print runs as a fresh process; it re-reads the file, uses its
+  // refresh token to call /v1/oauth/token, writes the rotated tokens, and
+  // exits. No in-memory copies survive to race against the new tokens.
   try {
     execSync(`echo "ping" | ${CLAUDE_PATH} --print --model haiku 2>/dev/null`, {
       timeout: 60000,
