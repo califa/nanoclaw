@@ -64,6 +64,7 @@ import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 import { startHeliumApi } from './helium-api.js';
 import { loadPlugins } from './plugin-loader.js';
+import { runBoMigrations } from './migration-runner.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -83,6 +84,10 @@ async function main(): Promise<void> {
   // 1b. Backfill container_configs from legacy container.json files.
   // Idempotent — skips groups that already have a config row.
   backfillContainerConfigs();
+
+  // 1b'. Apply any pending bo-features migrations (migrations/bo-*.ts).
+  //      No-op when migrations/ dir doesn't exist (vanilla install).
+  await runBoMigrations(db);
 
   // 1c. One-time filesystem cutover — idempotent, no-op after first run.
   migrateGroupsToClaudeLocal();
