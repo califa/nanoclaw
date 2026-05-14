@@ -59,6 +59,13 @@ function syncToOneCli(accessToken: string): void {
   }
 }
 
+/** Atomic write: write to .tmp + rename. Avoids partial files on disk-full / SIGKILL. */
+function atomicWrite(filePath: string, content: string, mode = 0o600): void {
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  fs.writeFileSync(tmp, content, { mode });
+  fs.renameSync(tmp, filePath);
+}
+
 export async function syncOAuthCredentials(): Promise<void> {
   try {
     // Case 1: canonical missing — try to self-heal from cache.
@@ -79,8 +86,7 @@ export async function syncOAuthCredentials(): Promise<void> {
       const stillValid = isValid(cache) && expiresAt > Date.now();
       if (stillValid) {
         try {
-          fs.copyFileSync(DEST_FILE, SRC_FILE);
-          fs.chmodSync(SRC_FILE, 0o600);
+          atomicWrite(SRC_FILE, fs.readFileSync(DEST_FILE, 'utf8'), 0o600);
           log.warn('Canonical credentials file was missing — restored from cache');
         } catch (err) {
           log.warn('Failed to restore canonical from cache', { err });
@@ -100,7 +106,7 @@ export async function syncOAuthCredentials(): Promise<void> {
     const oauth = data!.claudeAiOauth!;
 
     fs.mkdirSync(DEST_DIR, { recursive: true });
-    fs.writeFileSync(DEST_FILE, JSON.stringify(data));
+    atomicWrite(DEST_FILE, JSON.stringify(data), 0o644);
     log.info('OAuth credentials synced');
 
     syncToOneCli(oauth.accessToken!);
@@ -143,9 +149,22 @@ export function startOAuthFileWatcher(): fs.FSWatcher[] {
         debounce.set(
           key,
           setTimeout(() => {
-            log.info('OAuth watcher: canonical file changed', { eventType });
+            // Capture before-state for diagnostics so we can correlate
+            // "canonical changed" events with subsequent logouts.
+            let beforeExpires: number | null = null;
+            try {
+              if (fs.existsSync(SRC_FILE)) {
+                beforeExpires = readBlob(SRC_FILE)?.claudeAiOauth?.expiresAt ?? null;
+              }
+            } catch {}
+            log.info('OAuth watcher: canonical file changed', {
+              eventType,
+              exists: fs.existsSync(SRC_FILE),
+              expiresAt: beforeExpires,
+              expiresInMin: beforeExpires ? Math.round((beforeExpires - Date.now()) / 60_000) : null,
+            });
             void syncOAuthCredentials();
-          }, 250),
+          }, 100),
         );
       });
       w.on('error', (err) => log.warn('OAuth canonical watcher error', { err }));
@@ -175,9 +194,23 @@ export function startOAuthFileWatcher(): fs.FSWatcher[] {
             debounce.set(
               key,
               setTimeout(() => {
-                if (!fs.existsSync(sharedCredsFile)) return;
-                propagateGroupRefresh(sharedCredsFile, groupId);
-              }, 250),
+                if (fs.existsSync(sharedCredsFile)) {
+                  // File was written → propagate up if newer than canonical
+                  propagateGroupRefresh(sharedCredsFile, groupId);
+                } else {
+                  // File was deleted (container SDK got 401, cleared its
+                  // credentials). Restore from canonical so the next
+                  // spawn / current SDK retry sees valid tokens.
+                  if (fs.existsSync(SRC_FILE)) {
+                    try {
+                      atomicWrite(sharedCredsFile, fs.readFileSync(SRC_FILE, 'utf8'), 0o600);
+                      log.warn('Container per-group credentials deleted — restored from canonical', { groupId });
+                    } catch (err) {
+                      log.warn('Failed to restore per-group credentials', { groupId, err });
+                    }
+                  }
+                }
+              }, 100),
             );
           });
           w.on('error', () => {});
@@ -222,7 +255,7 @@ function propagateGroupRefresh(groupCredsFile: string, groupId: string): void {
     });
 
     // Write to canonical first so any new container spawn reads fresh creds.
-    fs.writeFileSync(SRC_FILE, JSON.stringify(groupBlob), { mode: 0o600 });
+    atomicWrite(SRC_FILE, JSON.stringify(groupBlob), 0o600);
     // Then sync cache + OneCLI via the standard path.
     void syncOAuthCredentials();
   } catch (err) {

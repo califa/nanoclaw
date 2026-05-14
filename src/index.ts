@@ -97,6 +97,24 @@ async function main(): Promise<void> {
   // the gateway path.
   startOAuthFileWatcher();
 
+  // System sleep/wake recovery: on macOS, setInterval timers can drift
+  // across sleep and fs.watch may miss events that happened while asleep.
+  // Detect wake by tracking the gap between successive setInterval ticks;
+  // if it's more than 2× the expected interval, we likely just woke up
+  // — force a credentials re-sync immediately to catch up any rotations
+  // that happened while we were out.
+  let lastTick = Date.now();
+  const WAKE_CHECK_INTERVAL = 30_000;
+  setInterval(() => {
+    const now = Date.now();
+    const gap = now - lastTick;
+    if (gap > WAKE_CHECK_INTERVAL * 2.5) {
+      log.info('Wake detected — forcing OAuth credential resync', { gapSec: Math.round(gap / 1000) });
+      void syncOAuthCredentials();
+    }
+    lastTick = now;
+  }, WAKE_CHECK_INTERVAL).unref?.();
+
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');
   const db = initDb(dbPath);

@@ -175,14 +175,31 @@ try {
   // exits. The fs.watch in v2 host catches the file write and syncs to
   // cache + OneCLI immediately.
   if (msUntilExpiry <= 0) {
-    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — invoking claude CLI to refresh`);
+    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — checking before refresh`);
   } else {
-    log(`Token expires in ${minRemaining} min — invoking claude CLI to refresh`);
+    log(`Token expires in ${minRemaining} min — checking before refresh`);
   }
 
-  // claude --print runs as a fresh process; it re-reads the file, uses its
-  // refresh token to call /v1/oauth/token, writes the rotated tokens, and
-  // exits. No in-memory copies survive to race against the new tokens.
+  // Skip refresh if other claude processes exist. The Claude CLI has its
+  // own bg_worker that auto-refreshes; if it's running, let it do its job.
+  // Triggering our own refresh while another claude has refresh_token_X
+  // in memory creates a rotation race that ends in 401 → "logged out".
+  try {
+    const pids = execSync('pgrep -lf "/claude\\b|/claude\\.exe\\b"', { timeout: 5000 })
+      .toString()
+      .trim();
+    if (pids) {
+      log(`Other claude processes running — skipping our refresh trigger:\n${pids}`);
+      syncCredentials(before.raw);
+      process.exit(0);
+    }
+  } catch {
+    // pgrep returns 1 when no matches; fall through to refresh
+  }
+
+  // No other claude processes — safe to invoke claude --print to refresh.
+  // Fresh process, no in-memory state survives after exit.
+  log('No other claude processes detected — invoking claude --print to refresh');
   try {
     execSync(`echo "ping" | ${CLAUDE_PATH} --print --model haiku 2>/dev/null`, {
       timeout: 60000,
