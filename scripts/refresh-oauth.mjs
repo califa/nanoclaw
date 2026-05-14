@@ -92,10 +92,88 @@ function syncCredentials(raw) {
   }
 }
 
-// (Previously: direct HTTP refresh against /v1/oauth/token. Removed —
-// turned this script into a refresh racer competing with Claude CLI and
-// every long-running Claude SDK session. Now we only invoke `claude
-// --print` to trigger a refresh, so Claude is the single OAuth client.)
+/**
+ * Direct HTTP OAuth refresh. ~500ms request → file write → done.
+ *
+ * Why HTTP (not `claude --print`): the cron has to refresh proactively
+ * to keep access tokens fresh ahead of Claude CLI bg_workers needing
+ * them. `claude --print` is a full Node process startup + several
+ * file reads + the refresh + a generation call (~5-10 sec). During
+ * that 5-10 sec window, any in-process claude bg_worker can ALSO
+ * attempt refresh, creating a rotation race that ends in 401. HTTP
+ * refresh shrinks the window 10-20×.
+ *
+ * Returns true on success, false on failure (caller falls back to CLI).
+ */
+async function httpRefresh(refreshToken) {
+  return new Promise((resolve) => {
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: OAUTH_CLIENT_ID,
+    }).toString();
+
+    const url = new URL(OAUTH_TOKEN_URL);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        'User-Agent': 'claude-cli/1.0',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+
+    const req = request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          log(`HTTP refresh failed: ${res.statusCode} ${data.slice(0, 200)}`);
+          resolve(false);
+          return;
+        }
+        try {
+          const result = JSON.parse(data);
+          if (!result.access_token || !result.refresh_token) {
+            log(`HTTP refresh: unexpected response shape`);
+            resolve(false);
+            return;
+          }
+
+          const raw = existsSync(CREDENTIALS_FILE) ? JSON.parse(readFileSync(CREDENTIALS_FILE, 'utf8')) : {};
+          const expiresAt = Date.now() + result.expires_in * 1000;
+          if (!raw.claudeAiOauth) raw.claudeAiOauth = {};
+          raw.claudeAiOauth.accessToken = result.access_token;
+          raw.claudeAiOauth.refreshToken = result.refresh_token;
+          raw.claudeAiOauth.expiresAt = expiresAt;
+
+          // Atomic write: write to .tmp, then rename. Avoids partial files.
+          const tmp = `${CREDENTIALS_FILE}.tmp.${process.pid}.${Date.now()}`;
+          writeFileSync(tmp, JSON.stringify(raw), { mode: 0o600 });
+          execSync(`mv "${tmp}" "${CREDENTIALS_FILE}"`);
+
+          log(`HTTP refresh succeeded — new expiry in ${Math.round(result.expires_in / 60)} min`);
+          syncCredentials(raw);
+          resolve(true);
+        } catch (err) {
+          log(`HTTP refresh parse error: ${err.message}`);
+          resolve(false);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      log(`HTTP refresh network error: ${err.message}`);
+      resolve(false);
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
 
 try {
   let before = getTokenState();
@@ -175,31 +253,30 @@ try {
   // exits. The fs.watch in v2 host catches the file write and syncs to
   // cache + OneCLI immediately.
   if (msUntilExpiry <= 0) {
-    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — checking before refresh`);
+    log(`Token EXPIRED (${Math.abs(minRemaining)} min ago) — attempting HTTP refresh`);
   } else {
-    log(`Token expires in ${minRemaining} min — checking before refresh`);
+    log(`Token expires in ${minRemaining} min — attempting HTTP refresh`);
   }
 
-  // Skip refresh if other claude processes exist. The Claude CLI has its
-  // own bg_worker that auto-refreshes; if it's running, let it do its job.
-  // Triggering our own refresh while another claude has refresh_token_X
-  // in memory creates a rotation race that ends in 401 → "logged out".
-  try {
-    const pids = execSync('pgrep -lf "/claude\\b|/claude\\.exe\\b"', { timeout: 5000 })
-      .toString()
-      .trim();
-    if (pids) {
-      log(`Other claude processes running — skipping our refresh trigger:\n${pids}`);
-      syncCredentials(before.raw);
+  // PRIMARY: direct HTTP refresh. Fast (~500ms), single file write,
+  // shrinks the race window so much that overlapping bg_worker refreshes
+  // become very unlikely. v1 added this exact pattern in commit ee25101
+  // ("OAuth refresher tries direct HTTP first, falls back to claude CLI")
+  // precisely to fix recurring logouts. Don't remove it.
+  if (before.hasRefreshToken) {
+    const ok = await httpRefresh(before.refreshToken);
+    if (ok) {
+      if (existsSync(AUTH_EXPIRED_FLAG)) unlinkSync(AUTH_EXPIRED_FLAG);
       process.exit(0);
     }
-  } catch {
-    // pgrep returns 1 when no matches; fall through to refresh
+    log('HTTP refresh failed — falling back to claude --print');
+  } else {
+    log('No refresh token available — falling back to claude --print');
   }
 
-  // No other claude processes — safe to invoke claude --print to refresh.
-  // Fresh process, no in-memory state survives after exit.
-  log('No other claude processes detected — invoking claude --print to refresh');
+  // FALLBACK: invoke claude --print. Larger race window but works when
+  // HTTP refresh is blocked (e.g. corporate proxy) or returns unexpected
+  // responses. Only reached if HTTP refresh fails.
   try {
     execSync(`echo "ping" | ${CLAUDE_PATH} --print --model haiku 2>/dev/null`, {
       timeout: 60000,
