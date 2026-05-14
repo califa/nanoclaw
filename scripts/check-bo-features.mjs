@@ -73,6 +73,39 @@ async function main() {
       }
       return 'fallback line found';
     });
+    check('slack.ts send_blocks bypass present', () => {
+      const file = path.join(ROOT, 'src/channels/slack.ts');
+      const src = fs.readFileSync(file, 'utf-8');
+      if (!src.includes('postBlocksDirect')) {
+        throw new Error('postBlocksDirect missing — Block Kit pass-through regressed');
+      }
+      return null;
+    });
+  });
+
+  group('Compiled output is fresh (host runs dist/, not src/)', () => {
+    // The launchd plist runs `node dist/index.js`. Editing src/ without
+    // `pnpm build` leaves the running process stale. Catch this case so the
+    // next host reload actually picks up the change.
+    const pairs = [
+      ['src/channels/slack.ts', 'dist/channels/slack.js'],
+      ['src/plugins/bo-reviewer-enforcement/index.ts', 'dist/plugins/bo-reviewer-enforcement/index.js'],
+      ['src/oauth-sync.ts', 'dist/oauth-sync.js'],
+    ];
+    for (const [srcRel, distRel] of pairs) {
+      check(`dist for ${srcRel} is newer than source`, () => {
+        const srcPath = path.join(ROOT, srcRel);
+        const distPath = path.join(ROOT, distRel);
+        if (!fs.existsSync(srcPath)) throw new Error(`source missing: ${srcRel}`);
+        if (!fs.existsSync(distPath)) throw new Error(`dist missing — run pnpm build`);
+        const srcMtime = fs.statSync(srcPath).mtimeMs;
+        const distMtime = fs.statSync(distPath).mtimeMs;
+        if (distMtime < srcMtime) {
+          throw new Error(`stale — source edited at ${new Date(srcMtime).toISOString()}, dist at ${new Date(distMtime).toISOString()}. Run pnpm build.`);
+        }
+        return null;
+      });
+    }
   });
 
   group('Plugins (src/plugins/bo-*)', () => {

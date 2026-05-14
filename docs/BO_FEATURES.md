@@ -84,14 +84,31 @@ git pull origin main
 # 2. Re-install any deps that upstream changed
 pnpm install
 
-# 3. Rebuild the container if container/* changed
+# 3. Rebuild the host TypeScript → dist/ (THE LAUNCHD PLIST RUNS dist/index.js,
+#    not src/. Editing src/ without `pnpm build` means the next host reload
+#    still runs the old code — easy to forget and very confusing to debug.)
+pnpm build
+
+# 4. Rebuild the container if container/* changed
 container/build.sh
 
-# 4. Run the regression checker — any "✗" means a behavior broke
+# 5. Run the regression checker — any "✗" means a behavior broke. It also
+#    verifies dist/ is newer than the corresponding src/ files for every
+#    file with a known bo-customization, so the "forgot to rebuild" trap
+#    fails loudly.
 pnpm check:bo-features
 
-# 5. If poll-loop.ts lost the bare-text fallback, re-apply it from this doc
+# 6. If poll-loop.ts lost the bare-text fallback, re-apply it from this doc
 
-# 6. Restart the host service
+# 7. Restart the host service
 launchctl kickstart -k "gui/$(id -u)/com.nanoclaw-v2-40b8cd25"
 ```
+
+## Critical: host runs dist/, not src/
+
+`~/Library/LaunchAgents/com.nanoclaw-v2-40b8cd25.plist` invokes
+`/opt/homebrew/bin/node /Users/joel/nanoclaw/dist/index.js`. Any change you
+make in `src/` must be compiled to `dist/` via `pnpm build` before
+`launchctl kickstart -k` picks it up. The regression checker compares
+mtimes of known-customized files between src/ and dist/ and fails if dist
+is older — run it after every edit before reloading.
