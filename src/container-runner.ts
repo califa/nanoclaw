@@ -256,6 +256,22 @@ function buildMounts(
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   syncSkillSymlinks(claudeDir, containerConfig);
 
+  // bo-features: copy the user's full-scope Claude Code credentials into the
+  // per-group .claude/ dir so the agent SDK can load cloud MCP connectors
+  // (Notion, Linear, GCal, Gmail, Slack, Figma, etc.) that the user has
+  // enabled on claude.ai. The credentials file must have user:mcp_servers
+  // scope — newer Claude Code keeps it at ~/.claude/.credentials.json
+  // (v1 was extracting from macOS keychain; not needed anymore).
+  try {
+    const hostCreds = path.join(process.env.HOME ?? '', '.claude', '.credentials.json');
+    if (fs.existsSync(hostCreds)) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.copyFileSync(hostCreds, path.join(claudeDir, '.credentials.json'));
+    }
+  } catch (err) {
+    log.warn('Failed to sync Claude OAuth credentials into container', { err });
+  }
+
   // Compose CLAUDE.md fresh every spawn from the shared base, enabled skill
   // fragments, and MCP server instructions. See `claude-md-compose.ts`.
   composeGroupClaudeMd(agentGroup);
@@ -431,6 +447,14 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // bo-features: clear OneCLI's CLAUDE_CODE_OAUTH_TOKEN placeholder env so
+  // the Claude Code SDK falls back to reading .credentials.json (mounted at
+  // /home/node/.claude/.credentials.json). The placeholder makes the SDK
+  // hardcode scopes to ["user:inference"], which blocks cloud MCP connector
+  // loading (Notion / Linear / GCal / Gmail / Slack / Figma / etc.).
+  // See v1 commit de08e89 for the original investigation.
+  args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=');
 
   // Host gateway
   args.push(...hostGatewayArgs());
