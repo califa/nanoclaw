@@ -2,6 +2,19 @@
 
 The two tools here solve different problems: `ask_user_question` forces a decision and waits for it; `send_card` displays structured content and moves on.
 
+### Slack Block Kit — markdown tables auto-convert
+
+On Slack, you do **not** need a special API for table rendering. Write a normal GitHub-flavored markdown table in the body of any `send_message` / `<message>` reply and the channel adapter parses it into a Block Kit `rich_text_table` automatically:
+
+```
+| #  | Task                              | Priority |
+|----|-----------------------------------|----------|
+| 1  | Review competitive analysis doc   | High     |
+| 2  | Mock up draft approval workflow   | High     |
+```
+
+This is `chat.postMessage` with `blocks` under the hood — the adapter's `toBlocksWithTable` step. Slack permits at most one table block per message; additional tables in the same message fall back to ASCII inside a code fence, which is also fine. **Do not refuse a table request with "send_message only supports plain text" — that was a v1 limitation that no longer applies.**
+
 ### Asking a multiple-choice question (`ask_user_question`)
 
 `mcp__nanoclaw__ask_user_question({ title, question, options, timeout? })` presents the user with a set of choices and **blocks your turn** until they tap one or the timeout expires (default: 300 seconds). Returns their chosen value.
