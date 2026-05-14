@@ -1,3 +1,4 @@
+import { materializeAttachments } from './attachments.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
@@ -159,6 +160,23 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     if (keep.length === 0) {
       log(`All ${normalMessages.length} non-command message(s) gated by script, skipping query`);
       continue;
+    }
+
+    // bo-features: materialize any base64-encoded attachments to disk so
+    // the formatter can reference them by path and the Read tool can see
+    // them. Mutates each message's parsed content; rewrites content JSON.
+    for (const m of keep) {
+      try {
+        const parsed = JSON.parse(m.content);
+        if (parsed && Array.isArray(parsed.attachments)) {
+          const before = JSON.stringify(parsed);
+          materializeAttachments(parsed);
+          const after = JSON.stringify(parsed);
+          if (before !== after) m.content = after;
+        }
+      } catch {
+        /* malformed JSON content — skip */
+      }
     }
 
     // Format messages: passthrough commands get raw text (only if the
