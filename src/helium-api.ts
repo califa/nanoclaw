@@ -612,8 +612,224 @@ export function startHeliumApi(): http.Server {
         logger.info({ service }, 'Credentials retrieved via 1Password');
         jsonResp(res, 200, { service, fields: creds });
 
-        // /meetings, /tasks endpoints lived here in v1 but queried v1-only
-        // tables that don't exist in v2. Still TODO.
+        // ── GET /tasks ────────────────────────────────────────────────────
+        // Bo's persistent "what have I already suggested" memory. Bo
+        // referenced this endpoint as cross-session memory.
+      } else if (method === 'GET' && url.pathname === '/tasks') {
+        try {
+          const Database = (await import('better-sqlite3')).default;
+          const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+          const db = new Database(dbPath, { readonly: true });
+          try {
+            const status = url.searchParams.get('status');
+            const rows = (status
+              ? db
+                  .prepare(
+                    `SELECT * FROM bo_suggested_tasks WHERE status = ?
+                     ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
+                  )
+                  .all(status)
+              : db
+                  .prepare(
+                    `SELECT * FROM bo_suggested_tasks
+                     ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
+                  )
+                  .all()) as Array<Record<string, unknown>>;
+            jsonResp(res, 200, {
+              count: rows.length,
+              tasks: rows.map((t) => {
+                let actions: string[] = [];
+                if (t.suggested_actions) {
+                  try {
+                    actions = JSON.parse(t.suggested_actions as string);
+                  } catch {
+                    actions = [t.suggested_actions as string];
+                  }
+                }
+                return { ...t, suggested_actions: actions };
+              }),
+            });
+          } finally {
+            db.close();
+          }
+        } catch (err) {
+          logger.warn({ err }, '/tasks GET failed');
+          jsonResp(res, 500, { error: 'tasks query failed' });
+        }
+
+        // ── POST /tasks ──────────────────────────────────────────────────
+      } else if (method === 'POST' && url.pathname === '/tasks') {
+        try {
+          let body = '';
+          for await (const chunk of req) body += chunk;
+          const data = JSON.parse(body) as {
+            source?: string;
+            source_detail?: string;
+            task?: string;
+            who_for?: string;
+            priority?: string;
+            suggested_actions?: string | string[];
+            status?: string;
+          };
+          if (!data.task) {
+            jsonResp(res, 400, { error: 'task field required' });
+          } else {
+            const Database = (await import('better-sqlite3')).default;
+            const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+            const db = new Database(dbPath);
+            try {
+              const result = db
+                .prepare(
+                  `INSERT INTO bo_suggested_tasks (source, source_detail, task, who_for, priority, suggested_actions, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  data.source ?? null,
+                  data.source_detail ?? null,
+                  data.task,
+                  data.who_for ?? null,
+                  data.priority ?? 'medium',
+                  Array.isArray(data.suggested_actions)
+                    ? JSON.stringify(data.suggested_actions)
+                    : (data.suggested_actions ?? null),
+                  data.status ?? 'pending',
+                  new Date().toISOString(),
+                );
+              jsonResp(res, 200, { status: 'ok', id: result.lastInsertRowid });
+            } finally {
+              db.close();
+            }
+          }
+        } catch (err) {
+          logger.warn({ err }, '/tasks POST failed');
+          jsonResp(res, 500, { error: 'task create failed' });
+        }
+
+        // ── PATCH /tasks/:id ─────────────────────────────────────────────
+      } else if (method === 'PATCH' && url.pathname.startsWith('/tasks/')) {
+        try {
+          const id = parseInt(url.pathname.split('/')[2], 10);
+          if (!Number.isInteger(id)) {
+            jsonResp(res, 400, { error: 'invalid id' });
+          } else {
+            let body = '';
+            for await (const chunk of req) body += chunk;
+            const updates = JSON.parse(body) as { status?: string; resolved_at?: string };
+            const Database = (await import('better-sqlite3')).default;
+            const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+            const db = new Database(dbPath);
+            try {
+              db.prepare(
+                `UPDATE bo_suggested_tasks SET status = COALESCE(?, status), resolved_at = COALESCE(?, resolved_at) WHERE id = ?`,
+              ).run(updates.status ?? null, updates.resolved_at ?? null, id);
+              jsonResp(res, 200, { status: 'ok', id });
+            } finally {
+              db.close();
+            }
+          }
+        } catch (err) {
+          logger.warn({ err }, '/tasks PATCH failed');
+          jsonResp(res, 500, { error: 'task update failed' });
+        }
+
+        // ── GET /meetings ────────────────────────────────────────────────
+      } else if (method === 'GET' && url.pathname === '/meetings') {
+        try {
+          const Database = (await import('better-sqlite3')).default;
+          const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+          const db = new Database(dbPath, { readonly: true });
+          try {
+            const date = url.searchParams.get('date');
+            const days = url.searchParams.get('days');
+            let rows;
+            if (date) {
+              rows = db.prepare(`SELECT * FROM bo_meeting_briefs WHERE date(start_time) = ?`).all(date);
+            } else if (days) {
+              const start = new Date().toISOString();
+              const end = new Date(Date.now() + parseInt(days, 10) * 86400000).toISOString();
+              rows = db
+                .prepare(`SELECT * FROM bo_meeting_briefs WHERE start_time >= ? AND start_time <= ? ORDER BY start_time`)
+                .all(start, end);
+            } else {
+              rows = db
+                .prepare(`SELECT * FROM bo_meeting_briefs WHERE start_time >= datetime('now') ORDER BY start_time LIMIT 50`)
+                .all();
+            }
+            const briefs = (rows as Array<Record<string, unknown>>).map((b) => ({
+              ...b,
+              attendees: b.attendees ? JSON.parse(b.attendees as string) : [],
+              open_items: b.open_items ? JSON.parse(b.open_items as string) : [],
+            }));
+            jsonResp(res, 200, {
+              date: date || (days ? `next ${days} days` : 'upcoming'),
+              count: briefs.length,
+              meetings: briefs,
+            });
+          } finally {
+            db.close();
+          }
+        } catch (err) {
+          logger.warn({ err }, '/meetings GET failed');
+          jsonResp(res, 500, { error: 'meetings query failed' });
+        }
+
+        // ── POST /meetings ───────────────────────────────────────────────
+      } else if (method === 'POST' && url.pathname === '/meetings') {
+        try {
+          let body = '';
+          for await (const chunk of req) body += chunk;
+          const data = JSON.parse(body) as {
+            event_id?: string;
+            title?: string;
+            start_time?: string;
+            end_time?: string;
+            attendees?: string | string[];
+            brief?: string;
+            open_items?: string | unknown[];
+            status?: string;
+          };
+          if (!data.event_id) {
+            jsonResp(res, 400, { error: 'event_id required' });
+          } else {
+            const Database = (await import('better-sqlite3')).default;
+            const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+            const db = new Database(dbPath);
+            const now = new Date().toISOString();
+            try {
+              db.prepare(
+                `INSERT INTO bo_meeting_briefs (event_id, title, start_time, end_time, attendees, brief, open_items, status, created_at, updated_at)
+                 VALUES (@event_id, @title, @start_time, @end_time, @attendees, @brief, @open_items, @status, @now, @now)
+                 ON CONFLICT(event_id) DO UPDATE SET
+                   title = excluded.title,
+                   start_time = excluded.start_time,
+                   end_time = excluded.end_time,
+                   attendees = excluded.attendees,
+                   brief = excluded.brief,
+                   open_items = excluded.open_items,
+                   status = excluded.status,
+                   updated_at = @now`,
+              ).run({
+                event_id: data.event_id,
+                title: data.title ?? null,
+                start_time: data.start_time ?? null,
+                end_time: data.end_time ?? null,
+                attendees: Array.isArray(data.attendees) ? JSON.stringify(data.attendees) : (data.attendees ?? null),
+                brief: data.brief ?? null,
+                open_items: Array.isArray(data.open_items)
+                  ? JSON.stringify(data.open_items)
+                  : (data.open_items ?? null),
+                status: data.status ?? null,
+                now,
+              });
+              jsonResp(res, 200, { status: 'ok', event_id: data.event_id });
+            } finally {
+              db.close();
+            }
+          }
+        } catch (err) {
+          logger.warn({ err }, '/meetings POST failed');
+          jsonResp(res, 500, { error: 'meeting upsert failed' });
+        }
 
         // ── GET /usage ───────────────────────────────────────────────────────
         // Token usage summary by period. Reads v2's central token_usage table

@@ -64,7 +64,10 @@ function shouldEnforce(msg: { kind?: string; channelType?: string; content?: str
 
 function loadDynamicRules(): string {
   const rules: string[] = [];
-  for (const file of ['bo-mistakes.md', 'feedback.md']) {
+  // bo-mistakes.md: per-rule entries written by bo-self-learning.
+  // feedback.md: free-form behavioral notes.
+  // bo-reviewer-patterns.md: distilled clusters from past blocks (bo-dreaming).
+  for (const file of ['bo-mistakes.md', 'feedback.md', 'bo-reviewer-patterns.md']) {
     const p = path.join(WIKI_DIR, file);
     if (fs.existsSync(p)) {
       try {
@@ -75,6 +78,28 @@ function loadDynamicRules(): string {
     }
   }
   return rules.length > 0 ? rules.join('\n\n') : '(no dynamic rules learned yet)';
+}
+
+function logReviewerBlock(
+  originalText: string,
+  reason: string,
+  fix: string | undefined,
+  sessionId: string | unknown,
+): void {
+  // Persist every block so bo-dreaming can distill recurring patterns.
+  // Inline import to avoid load-order issues (this plugin shouldn't be
+  // a hard dep on the central DB connection at module-load time).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getDb } = require('../../db/connection.js') as { getDb: () => import('better-sqlite3').Database };
+    getDb()
+      .prepare(
+        `INSERT INTO bo_reviewer_blocks (ts, session_id, original_text, reason, fix_applied) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(new Date().toISOString(), String(sessionId ?? ''), originalText.slice(0, 2000), reason, fix ?? null);
+  } catch (err) {
+    log.debug('bo-reviewer-enforcement: failed to log block', { err });
+  }
 }
 
 let anthropic: Anthropic | null = null;
@@ -194,6 +219,9 @@ export default async function init(): Promise<void> {
       verdict.fix !== null &&
       verdict.fix.length >= Math.max(20, Math.floor(check.text.length * 0.5)) &&
       !/^replace\b|^change\b|^use\b|^fix:?\s|^suggest/i.test(verdict.fix.trim());
+
+    // Log the block so bo-dreaming can distill patterns nightly.
+    logReviewerBlock(check.text, verdict.reason ?? '(no reason)', verdict.fix, msg.sessionId);
 
     if (looksLikeRealRewrite && verdict.fix) {
       log.warn('bo-reviewer-enforcement: applied fix from host-review', {

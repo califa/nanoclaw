@@ -66,6 +66,7 @@ import { startHeliumApi } from './helium-api.js';
 import { loadPlugins } from './plugin-loader.js';
 import { runBoMigrations } from './migration-runner.js';
 import { syncOAuthCredentials, startOAuthFileWatcher } from './oauth-sync.js';
+import { startSessionCleanup } from './session-cleanup.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -96,6 +97,11 @@ async function main(): Promise<void> {
   // would otherwise lag behind Claude CLI's own refresh, causing 401s on
   // the gateway path.
   startOAuthFileWatcher();
+
+  // 0b. Session cleanup — prune stale per-session JSONLs / archives / logs
+  // once at startup (delayed 30s) and every 24h. v1 had this; missing in
+  // v2 = disk fills over time. Script is at scripts/cleanup-sessions.sh.
+  startSessionCleanup();
 
   // System sleep/wake recovery: on macOS, setInterval timers can drift
   // across sleep and fs.watch may miss events that happened while asleep.
