@@ -280,6 +280,10 @@ export class ClaudeProvider implements AgentProvider {
   query(input: QueryInput): AgentQuery {
     const stream = new MessageStream();
     stream.push(input.prompt);
+    // Track latest user prompt so the usage record's `source` field
+    // captures the message text Bo was responding to (matches v1's
+    // "message: <text>" format).
+    let latestPrompt = input.prompt;
 
     const instructions = input.systemContext?.instructions;
 
@@ -340,6 +344,9 @@ export class ClaudeProvider implements AgentProvider {
             const durationMs = (message as { duration_ms?: number }).duration_ms;
             const durationApiMs = (message as { duration_api_ms?: number }).duration_api_ms;
             if (usage) {
+              // Distill the latest prompt into a one-line job label for the
+              // dashboard. The full prompt is preserved separately if needed.
+              const source = extractJobLabel(latestPrompt);
               const record = {
                 ts: new Date().toISOString(),
                 sdk_session_id: sessionId,
@@ -352,6 +359,7 @@ export class ClaudeProvider implements AgentProvider {
                 total_cost_usd: cost ?? 0,
                 duration_ms: durationMs ?? 0,
                 duration_api_ms: durationApiMs ?? 0,
+                source,
               };
               fs.appendFileSync('/workspace/usage.jsonl', JSON.stringify(record) + '\n');
             }
@@ -376,7 +384,10 @@ export class ClaudeProvider implements AgentProvider {
     }
 
     return {
-      push: (msg) => stream.push(msg),
+      push: (msg) => {
+        latestPrompt = msg;
+        stream.push(msg);
+      },
       end: () => stream.end(),
       events: translateEvents(),
       abort: () => {
@@ -385,6 +396,36 @@ export class ClaudeProvider implements AgentProvider {
       },
     };
   }
+}
+
+/**
+ * Distill a prompt into a one-line job label for the dashboard.
+ *
+ * The agent-runner wraps each inbound message as XML
+ * (`<inbound_messages><message>...</message></inbound_messages>`) — strip
+ * that. Tasks have a `[Scheduled task]` prefix — preserve as `task:` prefix.
+ * Truncate aggressively so the dashboard table stays readable.
+ */
+function extractJobLabel(prompt: string): string {
+  let text = prompt;
+
+  // Unwrap XML-formatted message blocks the agent-runner produces.
+  const msgMatch = text.match(/<message[^>]*>([\s\S]*?)<\/message>/);
+  if (msgMatch) text = msgMatch[1];
+
+  // Pull just the first non-trivial line.
+  const firstLine = text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0) ?? '';
+
+  // Detect scheduled-task prefix → label as task:
+  if (/^\[Scheduled task\]/i.test(firstLine)) {
+    const after = firstLine.replace(/^\[Scheduled task\]\s*:?\s*/i, '');
+    return `task: ${after}`.slice(0, 100);
+  }
+
+  return `message: ${firstLine}`.slice(0, 100);
 }
 
 registerProvider('claude', (opts) => new ClaudeProvider(opts));

@@ -612,9 +612,44 @@ export function startHeliumApi(): http.Server {
         logger.info({ service }, 'Credentials retrieved via 1Password');
         jsonResp(res, 200, { service, fields: creds });
 
-        // /usage, /meetings, /tasks endpoints lived here in v1 but queried
-        // v1-only tables (token_usage, meeting_briefs, suggested_tasks).
-        // Dropped on the v2 port — would need v2-native equivalents to revive.
+        // /meetings, /tasks endpoints lived here in v1 but queried v1-only
+        // tables that don't exist in v2. Still TODO.
+
+        // ── GET /usage ───────────────────────────────────────────────────────
+        // Token usage summary by period. Reads v2's central token_usage table
+        // (populated by bo-token-usage plugin). Kuma monitor #34 hits this.
+      } else if (method === 'GET' && url.pathname === '/usage') {
+        const period = url.searchParams.get('period') || '24h';
+        const sinceMs =
+          period === '7d' ? 7 * 86400000 : period === '30d' ? 30 * 86400000 : 86400000;
+        const since = new Date(Date.now() - sinceMs).toISOString();
+        try {
+          const Database = (await import('better-sqlite3')).default;
+          const dbPath = path.join(process.cwd(), 'data', 'v2.db');
+          const db = new Database(dbPath, { readonly: true });
+          try {
+            const summary = db
+              .prepare(
+                `SELECT
+                   COUNT(*) AS jobs,
+                   COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                   COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                   COALESCE(SUM(num_turns), 0) AS num_turns
+                 FROM token_usage
+                 WHERE timestamp >= ?`,
+              )
+              .get(since);
+            jsonResp(res, 200, { period, since, ...(summary as Record<string, unknown>) });
+          } finally {
+            db.close();
+          }
+        } catch (err) {
+          logger.warn({ err }, '/usage endpoint failed');
+          jsonResp(res, 500, { error: 'usage query failed' });
+        }
 
         // ── POST /send-file ──────────────────────────────────────────────────
         // Upload a local file to a Slack channel.

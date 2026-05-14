@@ -43,6 +43,7 @@ interface UsageRecord {
   total_cost_usd?: number;
   duration_ms?: number;
   duration_api_ms?: number;
+  source?: string;
 }
 
 let pollTimer: NodeJS.Timeout | null = null;
@@ -174,7 +175,7 @@ async function ingestSession(s: { agentGroupId: string; sessionId: string; sessi
           timestamp: rec.ts,
           group_folder: meta?.group_folder ?? s.agentGroupId,
           chat_jid: meta?.chat_jid ?? null,
-          source: `agent:${s.sessionId.slice(0, 12)}`,
+          source: rec.source ?? `agent:${s.sessionId.slice(0, 12)}`,
           total_cost_usd: rec.total_cost_usd ?? 0,
           num_turns: rec.num_turns ?? 0,
           duration_ms: rec.duration_ms ?? 0,
