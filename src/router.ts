@@ -156,6 +156,13 @@ function safeParseContent(raw: string): { text?: string; sender?: string; sender
  * Creates messaging group + session if they don't exist yet.
  */
 export async function routeInbound(event: InboundEvent): Promise<void> {
+  // Plugin-registered inbound transformers run first — they can mutate the
+  // event (e.g. transcribe audio → text) or drop it entirely (return null).
+  const { runInboundTransformers } = await import('./extension-points.js');
+  const transformed = await runInboundTransformers(event);
+  if (transformed === null) return;
+  event = transformed;
+
   // Pre-route interceptor — lets modules consume messages before any routing
   // (e.g. free-text replies during multi-step approval flows).
   if (messageInterceptor && (await messageInterceptor(event))) return;

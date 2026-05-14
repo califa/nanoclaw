@@ -251,6 +251,28 @@ async function deliverMessage(
 
   const content = JSON.parse(msg.content);
 
+  // Scheduler signal parsing — extract <retry>, <healed>, <no-fix>, etc. tags
+  // that plugins have registered handlers for. Tags are stripped from the
+  // user-visible content before delivery; handlers fire async.
+  if (typeof content.text === 'string') {
+    const { parseSchedulerSignals, dispatchSignal } = await import('./extension-points.js');
+    const { signals, stripped } = parseSchedulerSignals(content.text);
+    if (signals.length > 0) {
+      content.text = stripped;
+      msg.content = JSON.stringify(content);
+      const ctx = {
+        sessionId: session.id,
+        agentGroupId: session.agent_group_id,
+        messagingGroupId: session.messaging_group_id ?? null,
+        taskId: null,
+      };
+      for (const sig of signals) {
+        // Fire-and-forget; handler errors are logged inside dispatchSignal.
+        void dispatchSignal(sig, ctx);
+      }
+    }
+  }
+
   // System actions — handle internally (schedule_task, cancel_task, etc.)
   if (msg.kind === 'system') {
     await handleSystemAction(content, session, inDb);

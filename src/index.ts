@@ -63,6 +63,7 @@ import { startCliServer, stopCliServer } from './cli/socket-server.js';
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 import { startHeliumApi } from './helium-api.js';
+import { loadPlugins } from './plugin-loader.js';
 import type { Server as HttpServer } from 'http';
 
 let heliumServer: HttpServer | null = null;
@@ -185,6 +186,13 @@ async function main(): Promise<void> {
   // Local install carryover from the v1 fork. Safe to leave running even
   // when Helium isn't open — endpoints degrade gracefully.
   heliumServer = startHeliumApi();
+
+  // 9. Plugin loader — scans src/plugins/* for modules that register
+  //    transformers/signal handlers via extension-points.ts. Plugin code
+  //    lives on a sibling branch (e.g. bo-features), installed by an
+  //    /add-bo-features skill. The loader is no-op when src/plugins/
+  //    doesn't exist.
+  await loadPlugins();
 
   log.info('NanoClaw running');
 }
