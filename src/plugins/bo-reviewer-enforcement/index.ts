@@ -122,9 +122,11 @@ ${text}
 Return ONLY a JSON object, no commentary:
 {
   "ok": true | false,
-  "reason": "<one-line reason if not ok>",
-  "fix": "<suggested rewrite if obvious, omit otherwise>"
+  "reason": "<one-line reason if not ok, otherwise omit>",
+  "fix": "<the COMPLETE corrected message text, ready to send to Slack as-is; OMIT this field if you can't produce a full rewrite>"
 }
+
+CRITICAL: the "fix" field must contain the **entire rewritten message**, not instructions about how to fix it. Bad: "Replace ** with *". Good: the full message rewritten with single asterisks. If you can only describe the fix and not produce one, OMIT the fix field — the host will fall back to surfacing the original with the reason.
 
 Be strict. Default ok=false if uncertain. Static-rule violations must always fail.`;
 
@@ -184,22 +186,34 @@ export default async function init(): Promise<void> {
       return msg;
     }
 
-    // Verdict says NOT ok. If there's a fix, swap it in; otherwise surface
-    // the issue to Joel as a warning so he can decide.
-    if (verdict.fix) {
+    // Verdict says NOT ok. Use the fix only if it looks like an actual
+    // rewrite (≥50% of the original length and not obviously an instruction).
+    // Otherwise surface the original + reason and let Joel decide.
+    const looksLikeRealRewrite =
+      verdict.fix !== undefined &&
+      verdict.fix !== null &&
+      verdict.fix.length >= Math.max(20, Math.floor(check.text.length * 0.5)) &&
+      !/^replace\b|^change\b|^use\b|^fix:?\s|^suggest/i.test(verdict.fix.trim());
+
+    if (looksLikeRealRewrite && verdict.fix) {
       log.warn('bo-reviewer-enforcement: applied fix from host-review', {
         sessionId: msg.sessionId,
         reason: verdict.reason,
+        origLen: check.text.length,
+        fixLen: verdict.fix.length,
       });
       check.parsed.text = verdict.fix;
       return { ...msg, content: JSON.stringify(check.parsed) };
     }
 
-    log.warn('bo-reviewer-enforcement: blocked, no auto-fix', {
+    log.warn('bo-reviewer-enforcement: surfacing to user (no usable auto-fix)', {
       sessionId: msg.sessionId,
       reason: verdict.reason,
+      fixLen: verdict.fix?.length,
     });
-    check.parsed.text = `:warning: Reviewer flagged this message: ${verdict.reason}\n\nOriginal:\n>>> ${check.text}`;
+    // Send the ORIGINAL message with a brief flag prepended, so the user
+    // still sees Bo's actual response and knows why it's flagged.
+    check.parsed.text = `:warning: _Reviewer flagged: ${verdict.reason}_\n\n${check.text}`;
     return { ...msg, content: JSON.stringify(check.parsed) };
   });
 
