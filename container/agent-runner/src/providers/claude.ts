@@ -188,6 +188,72 @@ const postToolUseHook: HookCallback = async () => {
   return { continue: true };
 };
 
+/**
+ * Heuristically extract corrective user messages from the transcript so they
+ * can survive context compaction. Pattern matches Joel's typical correction
+ * shapes: "no", "don't", "stop", "never", "always", "you're wrong", or any
+ * imperative starting with "use", "send", "don't use", etc. Returns the most
+ * recent ones (up to `limit`), oldest-first.
+ *
+ * Why: Claude Code's auto-compact summarises old turns. Specific corrections
+ * ("one table per message, period") get smoothed out. Persisting them to
+ * bo-mistakes.md before compaction ensures the rule survives — the file is
+ * imported into every fresh CLAUDE.md via the bo-self-learning skill.
+ */
+function extractRecentCorrections(messages: ParsedMessage[], limit = 5): string[] {
+  const CORRECTION_RE =
+    /\b(no,|don'?t|stop|never|always|you'?re wrong|that'?s wrong|incorrect|don'?t forget|you (have|need) to|you should|you shouldn'?t|use\b|send\b)/i;
+  const recent = messages.filter((m) => m.role === 'user').slice(-30);
+  const corrective = recent
+    .filter((m) => {
+      const t = m.content.trim();
+      if (t.length < 4 || t.length > 600) return false;
+      return CORRECTION_RE.test(t);
+    })
+    .slice(-limit);
+  return corrective.map((m) => m.content.trim().replace(/\s+/g, ' '));
+}
+
+/**
+ * Append fresh user corrections to bo-mistakes.md before context compaction
+ * wipes the conversational memory of them. Dedupes against existing content
+ * (skip if the exact correction string already appears verbatim). Writes
+ * under a dated `## auto-saved-pre-compact-YYYY-MM-DD-HHMM` section so it's
+ * easy to audit which entries are auto-captured vs explicit `<memory-write>`.
+ */
+function persistCorrectionsToMistakes(corrections: string[]): void {
+  if (corrections.length === 0) return;
+  const mistakesPath = '/workspace/extra/wiki/personal/bo-mistakes.md';
+  let existing = '';
+  try {
+    existing = fs.readFileSync(mistakesPath, 'utf-8');
+  } catch {
+    existing = '';
+  }
+  const fresh = corrections.filter((c) => !existing.includes(c));
+  if (fresh.length === 0) {
+    log(`PreCompact: ${corrections.length} corrections detected, all already in bo-mistakes.md`);
+    return;
+  }
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+  const block = [
+    '',
+    `## auto-saved-pre-compact-${stamp}`,
+    'Rule: Joel said these things shortly before context compaction. Re-read carefully — they were said during the immediately previous session and apply going forward.',
+    `Why: ${now.toISOString()} — captured automatically by PreCompact hook before the conversation got summarised.`,
+    'Corrections (verbatim):',
+    ...fresh.map((c) => `- ${c.replace(/\n+/g, ' ')}`),
+    '',
+  ].join('\n');
+  try {
+    fs.appendFileSync(mistakesPath, block);
+    log(`PreCompact: saved ${fresh.length} fresh correction(s) to bo-mistakes.md`);
+  } catch (err) {
+    log(`PreCompact: failed to write bo-mistakes.md: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input) => {
     const preCompact = input as PreCompactHookInput;
@@ -202,6 +268,17 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       const content = fs.readFileSync(transcriptPath, 'utf-8');
       const messages = parseTranscript(content);
       if (messages.length === 0) return {};
+
+      // Persist recent user corrections to bo-mistakes.md BEFORE the compaction
+      // wipes them from conversational context. This is the part v1 never had
+      // and that caused Bo to forget "one table per message" mid-thread after
+      // the SDK auto-compacted.
+      try {
+        const corrections = extractRecentCorrections(messages);
+        persistCorrectionsToMistakes(corrections);
+      } catch (err) {
+        log(`PreCompact: correction-persist failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
 
       // Try to get summary from sessions index
       let summary: string | undefined;

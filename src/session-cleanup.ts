@@ -22,7 +22,11 @@ function runCleanup(): void {
       log.warn('Session cleanup failed', { err: err.message });
       return;
     }
-    const summary = stdout.trim().split('\n').filter((l) => l.includes('freed')).pop();
+    const summary = stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.includes('freed'))
+      .pop();
     if (summary) log.info('Session cleanup', { summary });
   });
 }

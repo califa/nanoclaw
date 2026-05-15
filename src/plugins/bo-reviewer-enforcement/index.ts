@@ -177,12 +177,84 @@ Be strict. Default ok=false if uncertain. Static-rule violations must always fai
   }
 }
 
+/**
+ * Static Block Kit shape check. Catches the specific Slack rendering footguns
+ * Joel keeps surfacing without needing a Haiku roundtrip — fast and free.
+ *
+ * Returns null = pass, string = the structural problem and what to do.
+ *
+ * Rules:
+ *   - >1 `rich_text_table` block in one message → only the first renders as a
+ *     real table; the rest fall back to ASCII in a code fence. Bo must split
+ *     across messages, one table per call. (Also handled by host-side
+ *     multi-table splitter for the markdown path; this rule catches raw
+ *     send_blocks payloads.)
+ *   - any `section` block with `fields` of length > 4 → the cramped 2-col
+ *     fields layout reads badly for task lists. Use rich_text_table instead.
+ */
+function checkBlockKitShape(blocks: unknown): string | null {
+  if (!Array.isArray(blocks)) return null;
+  let tableCount = 0;
+  let badFieldsCount = 0;
+  for (const raw of blocks) {
+    if (!raw || typeof raw !== 'object') continue;
+    const b = raw as Record<string, unknown>;
+    if (b.type === 'rich_text_table') tableCount++;
+    if (b.type === 'rich_text' && Array.isArray(b.elements)) {
+      for (const el of b.elements as Array<{ type?: string }>) {
+        if (el?.type === 'rich_text_table') tableCount++;
+      }
+    }
+    if (b.type === 'section' && Array.isArray((b as { fields?: unknown[] }).fields)) {
+      const fields = (b as { fields?: unknown[] }).fields ?? [];
+      if (fields.length > 4) badFieldsCount++;
+    }
+  }
+  const problems: string[] = [];
+  if (tableCount > 1) {
+    problems.push(
+      `${tableCount} rich_text_table blocks in one message — Slack renders only the first as a real table; the rest fall back to ASCII. Split into separate send_blocks calls, one table per message.`,
+    );
+  }
+  if (badFieldsCount > 0) {
+    problems.push(
+      `${badFieldsCount} section block(s) use \`fields\` with >4 entries. fields renders as a cramped 2-col grid — use rich_text_table for tabular data instead.`,
+    );
+  }
+  return problems.length ? problems.join(' ') : null;
+}
+
 export default async function init(): Promise<void> {
   const env = readEnvFile(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
   // Pre-create the client at boot so .env auth issues surface here.
   getClient(env);
 
   registerOutboundTransformer(async (msg) => {
+    // Block Kit shape check (fast, pre-Haiku). Applies to slack kind=chat-sdk
+    // messages with content.type === 'blocks'. Logs to bo_reviewer_blocks and
+    // surfaces the structural problem so bo-dreaming distills the rule.
+    if (msg.channelType === 'slack' && msg.kind === 'chat-sdk') {
+      try {
+        const parsed = JSON.parse(msg.content ?? '') as { type?: string; blocks?: unknown };
+        if (parsed.type === 'blocks') {
+          const problem = checkBlockKitShape(parsed.blocks);
+          if (problem) {
+            log.warn('bo-reviewer-enforcement: Block Kit shape violation', {
+              sessionId: msg.sessionId,
+              problem,
+            });
+            logReviewerBlock(JSON.stringify(parsed.blocks).slice(0, 1000), problem, undefined, msg.sessionId);
+            // Don't drop the message — Bo's still trying. But this gets
+            // distilled overnight, and Bo will see it next time he reads
+            // bo-reviewer-patterns.md. Pass through unchanged.
+            return msg;
+          }
+        }
+      } catch {
+        /* not JSON content — fall through to text-shape review below */
+      }
+    }
+
     const check = shouldEnforce(msg);
     if (!check.enforce || !check.parsed || !check.text) return msg;
 

@@ -622,19 +622,21 @@ export function startHeliumApi(): http.Server {
           const db = new Database(dbPath, { readonly: true });
           try {
             const status = url.searchParams.get('status');
-            const rows = (status
-              ? db
-                  .prepare(
-                    `SELECT * FROM bo_suggested_tasks WHERE status = ?
+            const rows = (
+              status
+                ? db
+                    .prepare(
+                      `SELECT * FROM bo_suggested_tasks WHERE status = ?
                      ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
-                  )
-                  .all(status)
-              : db
-                  .prepare(
-                    `SELECT * FROM bo_suggested_tasks
+                    )
+                    .all(status)
+                : db
+                    .prepare(
+                      `SELECT * FROM bo_suggested_tasks
                      ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC`,
-                  )
-                  .all()) as Array<Record<string, unknown>>;
+                    )
+                    .all()
+            ) as Array<Record<string, unknown>>;
             jsonResp(res, 200, {
               count: rows.length,
               tasks: rows.map((t) => {
@@ -748,11 +750,15 @@ export function startHeliumApi(): http.Server {
               const start = new Date().toISOString();
               const end = new Date(Date.now() + parseInt(days, 10) * 86400000).toISOString();
               rows = db
-                .prepare(`SELECT * FROM bo_meeting_briefs WHERE start_time >= ? AND start_time <= ? ORDER BY start_time`)
+                .prepare(
+                  `SELECT * FROM bo_meeting_briefs WHERE start_time >= ? AND start_time <= ? ORDER BY start_time`,
+                )
                 .all(start, end);
             } else {
               rows = db
-                .prepare(`SELECT * FROM bo_meeting_briefs WHERE start_time >= datetime('now') ORDER BY start_time LIMIT 50`)
+                .prepare(
+                  `SELECT * FROM bo_meeting_briefs WHERE start_time >= datetime('now') ORDER BY start_time LIMIT 50`,
+                )
                 .all();
             }
             const briefs = (rows as Array<Record<string, unknown>>).map((b) => ({
@@ -962,6 +968,94 @@ export function startHeliumApi(): http.Server {
         const permalink = completeData.files?.[0]?.permalink;
         logger.info({ chatJid, file: fname, permalink }, 'File uploaded to Slack');
         jsonResp(res, 200, { status: 'ok', permalink });
+
+        // ── GET /slack/inspect?channel=…&ts=… ─────────────────────────────
+        // Fetches a Slack message by channel + ts via conversations.history,
+        // returning the actual Block Kit block types Slack rendered. Used by
+        // the container's `inspect_message` MCP tool so Bo can verify that
+        // his send_blocks / markdown-table outputs landed as the right
+        // structure rather than guessing from input.
+      } else if (method === 'GET' && url.pathname === '/slack/inspect') {
+        const channel = url.searchParams.get('channel') ?? '';
+        const ts = url.searchParams.get('ts') ?? '';
+        // Optional: when the message is a thread reply, conversations.history
+        // can't find it (history returns only thread-parent / top-level
+        // messages). Pass thread_ts to switch to conversations.replies.
+        const threadTs = url.searchParams.get('thread_ts') ?? '';
+        if (!channel || !ts) {
+          jsonResp(res, 400, { error: 'channel and ts query params are required' });
+          return;
+        }
+        const botToken = process.env.SLACK_BOT_TOKEN ?? readEnvFile(['SLACK_BOT_TOKEN']).SLACK_BOT_TOKEN;
+        if (!botToken) {
+          jsonResp(res, 500, { error: 'SLACK_BOT_TOKEN not configured on host' });
+          return;
+        }
+        try {
+          interface SlackMessageJson {
+            ok: boolean;
+            error?: string;
+            messages?: Array<{
+              ts: string;
+              text?: string;
+              blocks?: Array<{ type: string; [k: string]: unknown }>;
+            }>;
+          }
+          let slackJson: SlackMessageJson;
+          if (threadTs) {
+            // Thread reply path
+            const params = new URLSearchParams({ channel, ts: threadTs, limit: '200' });
+            const slackRes = await fetch(`https://slack.com/api/conversations.replies?${params}`, {
+              headers: { Authorization: `Bearer ${botToken}` },
+            });
+            slackJson = (await slackRes.json()) as SlackMessageJson;
+          } else {
+            // Top-level / channel history path
+            const params = new URLSearchParams({ channel, latest: ts, inclusive: 'true', limit: '1' });
+            const slackRes = await fetch(`https://slack.com/api/conversations.history?${params}`, {
+              headers: { Authorization: `Bearer ${botToken}` },
+            });
+            slackJson = (await slackRes.json()) as SlackMessageJson;
+          }
+          if (!slackJson.ok) {
+            jsonResp(res, 502, { error: slackJson.error || 'slack api error', channel, ts, threadTs });
+            return;
+          }
+          // Find the exact message by ts (replies returns the full thread).
+          const msg = slackJson.messages?.find((m) => m.ts === ts);
+          if (!msg) {
+            jsonResp(res, 404, { error: 'message not found at that ts', channel, ts, threadTs });
+            return;
+          }
+          const blocks = msg.blocks ?? [];
+          // Summarise the structure Bo cares about: block types, count of
+          // rich_text_table blocks, whether the message has any fields-style
+          // sections (cramped 2-col layout = anti-pattern for task lists).
+          const blockTypes = blocks.map((b) => b.type);
+          const tableCount = blocks.filter((b) => {
+            if (b.type === 'rich_text_table') return true;
+            if (b.type !== 'rich_text') return false;
+            const elements = (b as { elements?: Array<{ type?: string }> }).elements;
+            return Array.isArray(elements) && elements.some((e) => e?.type === 'rich_text_table');
+          }).length;
+          const hasFieldsSection = blocks.some(
+            (b) => b.type === 'section' && Array.isArray((b as { fields?: unknown[] }).fields) && ((b as { fields?: unknown[] }).fields?.length ?? 0) > 0,
+          );
+          jsonResp(res, 200, {
+            ok: true,
+            channel,
+            ts,
+            blockTypes,
+            blockCount: blocks.length,
+            tableCount,
+            hasFieldsSection,
+            text: msg.text ?? null,
+            rawBlocks: blocks,
+          });
+        } catch (err) {
+          logger.warn({ err, channel, ts }, '/slack/inspect failed');
+          jsonResp(res, 500, { error: 'inspect failed', detail: err instanceof Error ? err.message : String(err) });
+        }
       } else {
         jsonResp(res, 404, { error: 'Not found' });
       }
