@@ -1039,7 +1039,10 @@ export function startHeliumApi(): http.Server {
             return Array.isArray(elements) && elements.some((e) => e?.type === 'rich_text_table');
           }).length;
           const hasFieldsSection = blocks.some(
-            (b) => b.type === 'section' && Array.isArray((b as { fields?: unknown[] }).fields) && ((b as { fields?: unknown[] }).fields?.length ?? 0) > 0,
+            (b) =>
+              b.type === 'section' &&
+              Array.isArray((b as { fields?: unknown[] }).fields) &&
+              ((b as { fields?: unknown[] }).fields?.length ?? 0) > 0,
           );
           jsonResp(res, 200, {
             ok: true,
