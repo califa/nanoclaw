@@ -166,6 +166,73 @@ const preToolUseHook: HookCallback = async (input) => {
       stopReason: `Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`,
     } as unknown as ReturnType<HookCallback>;
   }
+
+  // Hard gate: Read on the Obsidian vault. The /task-review skill says
+  // "never use direct filesystem access on vault paths" and the obsidian-
+  // bridge already strips the verbose ## Transcript section from Meetings/
+  // notes. Bypassing the bridge via Read pulls the full file (often 80–
+  // 100KB per Granola meeting) and blows out the context window. Verified
+  // 2026-05-15 in sess-1778893211049-8bgv1g where a single fresh-session
+  // task review hit auto-compaction after 5 such reads. Force the bridge.
+  //
+  // The denial reason MUST be returned via hookSpecificOutput.permission-
+  // DecisionReason — not legacy {decision,stopReason}. Verified by reading
+  // the SDK's PreToolUseHookSpecificOutput type in agent-runner's
+  // node_modules. The legacy shape returns a generic "denied this tool"
+  // to the agent (no reason visible), which is why my first attempt at
+  // this gate left Bo confused and bypassing via `Bash: cat`.
+  if (toolName === 'Read') {
+    const filePath = typeof i.tool_input?.file_path === 'string' ? (i.tool_input.file_path as string) : '';
+    if (filePath.startsWith('/workspace/extra/brain/')) {
+      const relative = filePath.slice('/workspace/extra/brain/'.length);
+      const reason =
+        `Read is blocked on Obsidian vault paths (/workspace/extra/brain/). ` +
+        `Use the obsidian-bridge instead: ` +
+        `curl -s --max-time 15 --noproxy '*' -X POST http://host.docker.internal:27999/run ` +
+        `-H 'Content-Type: application/json' ` +
+        `-d '{"args":["read","path=${relative}","vault=Brain"]}' | jq -r .stdout ` +
+        `— the bridge auto-strips the ## Transcript section from Meetings/ notes so the summary fits in context. ` +
+        `Do NOT fall back to \`Bash: cat\` on these paths; that bypasses the bridge's trim and will exhaust context. ` +
+        `If you genuinely need a Transcript quote, ask the user first.`;
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: reason,
+        },
+      } as unknown as ReturnType<HookCallback>;
+    }
+  }
+
+  // Hard gate: ticket CREATION is restricted to the makebo workspace.
+  // Bo has three Linear surfaces — the claude.ai cloud connector
+  // (mcp__claude_ai_Linear__*) and mcp__linear-unify__* both point at the
+  // Unify COMPANY workspace and literally cannot see makebo; only
+  // mcp__linear-makebo__* writes to the right place (team BO). Creating a
+  // ticket on a Unify surface is always a mistake (seen twice: J-22, J-23) —
+  // instructions alone didn't hold because Bo defaults to the cloud connector.
+  // Block Unify-Linear issue *creation* and redirect. Reads and updates
+  // (which carry an existing issue id) pass through untouched.
+  {
+    const lower = toolName.toLowerCase();
+    const isUnifyLinear =
+      toolName.startsWith('mcp__claude_ai_Linear__') ||
+      toolName.startsWith('mcp__linear-unify__');
+    const isIssueCreate =
+      /create.*issue|issue.*create/.test(lower) ||
+      (lower.endsWith('__save_issue') && !i.tool_input?.id);
+    if (isUnifyLinear && isIssueCreate) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'This tool writes to the Unify COMPANY workspace (read-only for you). Ticket creation goes to makebo only. Use the `create_ticket` tool (mcp__nanoclaw__create_ticket) — it takes {title, description, priority} and returns a BO-… identifier. "makebo" is resolved: do NOT search Linear or ask what it is. Do NOT retry on any claude_ai_Linear or linear-unify tool.',
+        },
+      } as unknown as ReturnType<HookCallback>;
+    }
+  }
+
   // Bash exposes its timeout via the tool_input.timeout field (ms). Any other
   // tool: no declared timeout.
   const declaredTimeoutMs =
@@ -197,7 +264,7 @@ const postToolUseHook: HookCallback = async () => {
  *
  * Why: Claude Code's auto-compact summarises old turns. Specific corrections
  * ("one table per message, period") get smoothed out. Persisting them to
- * bo-mistakes.md before compaction ensures the rule survives — the file is
+ * bo-playbook.md before compaction ensures the rule survives — the file is
  * imported into every fresh CLAUDE.md via the bo-self-learning skill.
  */
 function extractRecentCorrections(messages: ParsedMessage[], limit = 5): string[] {
@@ -215,24 +282,24 @@ function extractRecentCorrections(messages: ParsedMessage[], limit = 5): string[
 }
 
 /**
- * Append fresh user corrections to bo-mistakes.md before context compaction
+ * Append fresh user corrections to bo-playbook.md before context compaction
  * wipes the conversational memory of them. Dedupes against existing content
  * (skip if the exact correction string already appears verbatim). Writes
  * under a dated `## auto-saved-pre-compact-YYYY-MM-DD-HHMM` section so it's
  * easy to audit which entries are auto-captured vs explicit `<memory-write>`.
  */
-function persistCorrectionsToMistakes(corrections: string[]): void {
+function persistCorrectionsToPlaybook(corrections: string[]): void {
   if (corrections.length === 0) return;
-  const mistakesPath = '/workspace/extra/wiki/personal/bo-mistakes.md';
+  const playbookPath = '/workspace/extra/wiki/personal/bo-playbook.md';
   let existing = '';
   try {
-    existing = fs.readFileSync(mistakesPath, 'utf-8');
+    existing = fs.readFileSync(playbookPath, 'utf-8');
   } catch {
     existing = '';
   }
   const fresh = corrections.filter((c) => !existing.includes(c));
   if (fresh.length === 0) {
-    log(`PreCompact: ${corrections.length} corrections detected, all already in bo-mistakes.md`);
+    log(`PreCompact: ${corrections.length} corrections detected, all already in bo-playbook.md`);
     return;
   }
   const now = new Date();
@@ -247,10 +314,10 @@ function persistCorrectionsToMistakes(corrections: string[]): void {
     '',
   ].join('\n');
   try {
-    fs.appendFileSync(mistakesPath, block);
-    log(`PreCompact: saved ${fresh.length} fresh correction(s) to bo-mistakes.md`);
+    fs.appendFileSync(playbookPath, block);
+    log(`PreCompact: saved ${fresh.length} fresh correction(s) to bo-playbook.md`);
   } catch (err) {
-    log(`PreCompact: failed to write bo-mistakes.md: ${err instanceof Error ? err.message : String(err)}`);
+    log(`PreCompact: failed to write bo-playbook.md: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -269,13 +336,13 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       const messages = parseTranscript(content);
       if (messages.length === 0) return {};
 
-      // Persist recent user corrections to bo-mistakes.md BEFORE the compaction
+      // Persist recent user corrections to bo-playbook.md BEFORE the compaction
       // wipes them from conversational context. This is the part v1 never had
       // and that caused Bo to forget "one table per message" mid-thread after
       // the SDK auto-compacted.
       try {
         const corrections = extractRecentCorrections(messages);
-        persistCorrectionsToMistakes(corrections);
+        persistCorrectionsToPlaybook(corrections);
       } catch (err) {
         log(`PreCompact: correction-persist failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -381,6 +448,8 @@ export class ClaudeProvider implements AgentProvider {
         model: this.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         effort: this.effort as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        settings: { alwaysThinkingEnabled: true } as any,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
@@ -485,24 +554,42 @@ export class ClaudeProvider implements AgentProvider {
  */
 function extractJobLabel(prompt: string): string {
   let text = prompt;
+  let prefix = 'message';
 
-  // Unwrap XML-formatted message blocks the agent-runner produces.
-  const msgMatch = text.match(/<message[^>]*>([\s\S]*?)<\/message>/);
-  if (msgMatch) text = msgMatch[1];
+  // Strip the `<context timezone=".." />` header formatter.ts prepends to every
+  // prompt. Without this, prompts that carry only <task>/<webhook>/<system_response>
+  // blocks (no <message>) fall through to using the header as the label.
+  text = text.replace(/<context\b[^>]*\/>\s*/i, '');
 
-  // Pull just the first non-trivial line.
+  // Unwrap whichever message-shaped block formatter.ts produced. \b prevents
+  // matching <messages> (the multi-message wrapper); the engine keeps scanning
+  // and finds the inner <message ...> instead.
+  const blockMatch = text.match(/<(message|task|webhook|system_response)\b[^>]*>([\s\S]*?)<\/\1>/);
+  if (blockMatch) {
+    let inner = blockMatch[2];
+    if (blockMatch[1] === 'task') {
+      // <task> bodies are "Script output:\n…\nInstructions:\n<prompt>". Skip to
+      // the prompt so the label is the work, not the script-output blob.
+      const idx = inner.indexOf('Instructions:');
+      if (idx !== -1) inner = inner.slice(idx + 'Instructions:'.length);
+      prefix = 'task';
+    }
+    text = inner;
+  }
+
   const firstLine = text
     .split('\n')
     .map((l) => l.trim())
     .find((l) => l.length > 0) ?? '';
 
-  // Detect scheduled-task prefix → label as task:
-  if (/^\[Scheduled task\]/i.test(firstLine)) {
-    const after = firstLine.replace(/^\[Scheduled task\]\s*:?\s*/i, '');
-    return `task: ${after}`.slice(0, 100);
-  }
+  // Legacy: some flows used to prefix prompts with literal "[Scheduled task]"
+  // text. Strip it if present so the label is just the task description.
+  const cleaned = firstLine.replace(/^\[Scheduled task\]\s*:?\s*/i, (m) => {
+    prefix = 'task';
+    return '';
+  });
 
-  return `message: ${firstLine}`.slice(0, 100);
+  return `${prefix}: ${cleaned}`.slice(0, 100);
 }
 
 registerProvider('claude', (opts) => new ClaudeProvider(opts));

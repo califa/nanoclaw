@@ -8,6 +8,7 @@
  * send_card's cross-platform Card schema isn't expressive enough (section
  * blocks with fields, headers, dividers, etc.).
  */
+import { getRoutingOverride } from '../current-batch.js';
 import { findQuestionResponse, markCompleted } from '../db/messages-in.js';
 import { writeMessageOut } from '../db/messages-out.js';
 import { getSessionRouting } from '../db/session-routing.js';
@@ -23,7 +24,7 @@ function generateId(): string {
 }
 
 function routing() {
-  return getSessionRouting();
+  return getRoutingOverride() ?? getSessionRouting();
 }
 
 function ok(text: string) {
@@ -130,6 +131,52 @@ export const askUserQuestion: McpToolDefinition = {
 
     log(`ask_user_question timeout: ${questionId}`);
     return err(`Question timed out after ${timeout / 1000}s`);
+  },
+};
+
+export const createTicket: McpToolDefinition = {
+  tool: {
+    name: 'create_ticket',
+    description:
+      'Create a ticket/issue in the makebo Linear workspace (team BO). This is the ONLY correct way to create a ticket, and the ONLY place BoUI / personal / self-improvement tickets go. Use it whenever Joel asks to "create a ticket", "file an issue", etc. — unless he explicitly says "in Unify". Do NOT use any Linear MCP tool (claude_ai_Linear, linear-unify) to create tickets; they write to the wrong workspace and are blocked. "makebo" is a resolved, known destination — you never need to search for or ask what it is; just call this tool. Write a real description per the ticket-quality rules (goal, scope, where in the code, acceptance criteria).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'Concise, specific ticket title' },
+        description: {
+          type: 'string',
+          description: 'Full description: goal, scope, where (repo/files), dependencies, acceptance criteria',
+        },
+        priority: {
+          type: 'number',
+          description: 'Priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low (default 3)',
+        },
+      },
+      required: ['title'],
+    },
+  },
+  async handler(args) {
+    const title = args.title as string;
+    if (!title) return err('title is required');
+    try {
+      const res = await fetch('http://host.docker.internal:9224/makebo/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          description: (args.description as string) ?? '',
+          priority: typeof args.priority === 'number' ? args.priority : 3,
+        }),
+      });
+      const j = (await res.json()) as { ok?: boolean; identifier?: string; url?: string; error?: string };
+      if (j?.ok && j.identifier) {
+        log(`create_ticket: ${j.identifier}`);
+        return ok(`Created ${j.identifier} in makebo — ${j.url}`);
+      }
+      return err(`ticket creation failed: ${j?.error ?? JSON.stringify(j).slice(0, 300)}`);
+    } catch (e) {
+      return err(`makebo ticket endpoint unreachable: ${e instanceof Error ? e.message : String(e)}`);
+    }
   },
 };
 
@@ -256,7 +303,7 @@ export const sendBlocks: McpToolDefinition = {
   tool: {
     name: 'send_blocks',
     description:
-      'Send raw Slack Block Kit blocks. Use this when the cross-platform send_card schema is not expressive enough — e.g. section blocks with fields, header blocks, dividers between sections, accessory elements. Slack-only; non-Slack destinations receive the fallbackText instead.',
+      'Send raw Slack Block Kit blocks. **NOT for multi-tier task reviews or tabular content with priority groups.** For task reviews / digests / structured data with multiple tiers, use `send_message` with one markdown table per tier in a single body — the Slack adapter auto-splits N markdown tables into N separate Slack posts. Use `send_blocks` ONLY for: (a) cards with interactive buttons (actions block), (b) a single Block Kit block (header alone, one section alone, or an image/file accessory). If you find yourself emitting `header → section → divider → section → divider → section`, stop and switch to `send_message` with markdown tables. The host auto-rewrites multi-section payloads to markdown, but emitting the wrong shape wastes a turn. Slack-only; non-Slack destinations receive the fallbackText instead.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -302,4 +349,4 @@ export const sendBlocks: McpToolDefinition = {
   },
 };
 
-registerTools([askUserQuestion, sendCard, sendBlocks, inspectMessage]);
+registerTools([askUserQuestion, createTicket, sendCard, sendBlocks, inspectMessage]);

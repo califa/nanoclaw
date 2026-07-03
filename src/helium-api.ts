@@ -31,16 +31,12 @@ const CLAUDE_EXT_ID = 'fcoeoabgfenejglbffodgkkbkcdhcgfn';
 const BO_GROUP_COLOR = 'cyan';
 
 const CREDENTIAL_ALLOWLIST_PATH = path.join(os.homedir(), '.config', 'nanoclaw', 'credential-allowlist.json');
+const CREDENTIAL_CACHE_PATH = path.join(os.homedir(), '.config', 'nanoclaw', 'credential-cache.json');
 
 interface CredentialAllowlist {
   vault: string;
   services: Record<string, { item: string; fields: string[] }>;
 }
-
-// Use a wrapper script that explicitly sets OP_SERVICE_ACCOUNT_TOKEN and OP_CONFIG_DIR.
-// Calling op directly from Node.js execFileSync inside a launchd process hangs
-// because 1Password's desktop app CLI integration intercepts the call.
-const OP_WRAPPER = path.join(process.cwd(), 'scripts', 'op-wrapper.sh');
 
 function getCredentials(service: string): Record<string, string> | null {
   let allowlist: CredentialAllowlist;
@@ -54,38 +50,105 @@ function getCredentials(service: string): Record<string, string> | null {
   const entry = allowlist.services[service];
   if (!entry) return null;
 
+  // Read from pre-fetched cache (populated by scripts/cache-credentials.sh).
+  // The op CLI's daemon hangs when called from launchd, so we avoid it at runtime.
+  // OTP is the exception — TOTP codes rotate every 30s and can't be cached.
+  let cache: Record<string, Record<string, string>> = {};
+  try {
+    cache = JSON.parse(fs.readFileSync(CREDENTIAL_CACHE_PATH, 'utf-8'));
+  } catch {
+    // No cache — fall through to op CLI
+  }
+
+  const cached = cache[service];
+  if (cached && Object.keys(cached).length > 0) {
+    const result: Record<string, string> = { ...cached };
+    // Fetch live OTP if the service has one-time password in its fields
+    if (entry.fields.includes('one-time password')) {
+      const otp = getOtpViaOp(entry.item, allowlist.vault);
+      if (otp) result['otp'] = otp;
+    }
+    return result;
+  }
+
+  // Fallback: try op CLI directly (works from interactive terminals, not launchd)
+  logger.warn({ service }, 'No credential cache — falling back to op CLI (may hang under launchd)');
+  return getCredentialsViaOp(service, entry, allowlist.vault);
+}
+
+function getOtpViaOp(item: string, vault: string): string | null {
+  const opToken =
+    process.env.OP_SERVICE_ACCOUNT_TOKEN || readEnvFile(['OP_SERVICE_ACCOUNT_TOKEN']).OP_SERVICE_ACCOUNT_TOKEN || '';
+  if (!opToken) return null;
+  try {
+    return opExec(['item', 'get', item, '--vault', vault, '--otp', '--no-color'], opToken) || null;
+  } catch (err) {
+    logger.warn({ item, error: err instanceof Error ? err.message : String(err) }, 'OTP fetch failed');
+    return null;
+  }
+}
+
+function opExec(opArgs: string[], opToken: string): string {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'op-cred-'));
+  // Write a minimal config without a device ID — the device field triggers
+  // desktop-app integration which hangs when spawned from launchd.
+  // op requires mode 600 on config files.
+  const configPath = path.join(tmpDir, 'config');
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      latest_signin: '',
+      device: '',
+      accounts: null,
+    }),
+    { mode: 0o600 },
+  );
+  try {
+    return execFileSync('/opt/homebrew/bin/op', opArgs, {
+      timeout: 15000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+        HOME: tmpDir,
+        OP_SERVICE_ACCOUNT_TOKEN: opToken,
+        OP_CONFIG_DIR: tmpDir,
+        XDG_CONFIG_HOME: tmpDir,
+        XDG_RUNTIME_DIR: tmpDir,
+      },
+    })
+      .toString()
+      .trim();
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true });
+    } catch {}
+  }
+}
+
+function getCredentialsViaOp(
+  service: string,
+  entry: { item: string; fields: string[] },
+  vault: string,
+): Record<string, string> | null {
+  const opToken =
+    process.env.OP_SERVICE_ACCOUNT_TOKEN || readEnvFile(['OP_SERVICE_ACCOUNT_TOKEN']).OP_SERVICE_ACCOUNT_TOKEN || '';
   const result: Record<string, string> = {};
   for (const field of entry.fields) {
     try {
-      const opToken = process.env.OP_SERVICE_ACCOUNT_TOKEN || '';
-      const opScript = path.join(process.cwd(), 'scripts', 'op-get-field.sh');
-
+      const value =
+        field === 'one-time password'
+          ? opExec(['item', 'get', entry.item, '--vault', vault, '--otp', '--no-color'], opToken)
+          : opExec(['item', 'get', entry.item, '--vault', vault, '--fields', field, '--reveal', '--no-color'], opToken);
       if (field === 'one-time password') {
-        const value = execFileSync('/bin/bash', [opScript, opToken, entry.item, allowlist.vault, 'otp', ''], {
-          timeout: 15000,
-        })
-          .toString()
-          .trim();
         result['otp'] = value;
       } else {
-        const value = execFileSync('/bin/bash', [opScript, opToken, entry.item, allowlist.vault, 'field', field], {
-          timeout: 15000,
-        })
-          .toString()
-          .trim();
         result[field] = value;
       }
     } catch (err) {
       const stderr =
         err && typeof err === 'object' && 'stderr' in err ? (err as { stderr: Buffer }).stderr?.toString() : undefined;
       logger.warn(
-        {
-          service,
-          field,
-          error: err instanceof Error ? err.message : String(err),
-          stderr,
-          hasOpToken: !!process.env.OP_SERVICE_ACCOUNT_TOKEN,
-        },
+        { service, field, error: err instanceof Error ? err.message : String(err), stderr, hasOpToken: !!opToken },
         'Failed to retrieve credential field',
       );
     }
@@ -383,13 +446,25 @@ export function startHeliumApi(): http.Server {
     const url = new URL(req.url ?? '/', `http://localhost:${HELIUM_API_PORT}`);
     const method = req.method ?? 'GET';
 
+    // CDP proxy: forwards Chrome's /json endpoints, rewriting webSocketDebuggerUrl
+    // so containers connect back through this server (Chrome rejects non-localhost
+    // Host headers and the --remote-allow-hosts flag is ignored by Helium 148).
+    //
+    // Accepts both shapes:
+    //   /json/*       /devtools/*        — what agent-browser (and CDP clients
+    //                                      generally) hit at the root by default
+    //   /cdp/json/*   /cdp/devtools/*    — legacy prefix, kept for callers that
+    //                                      already point at /cdp/
+    const isCdpPrefix = url.pathname.startsWith('/cdp/');
+    const chromePath = isCdpPrefix ? url.pathname.slice('/cdp'.length) : url.pathname;
+    const wsPrefix = isCdpPrefix ? '/cdp/devtools/' : '/devtools/';
+    const isJsonGet =
+      method === 'GET' &&
+      (chromePath === '/json' || chromePath.startsWith('/json/') || chromePath.startsWith('/json?'));
+    const isJsonNew = method === 'PUT' && chromePath === '/json/new';
+
     try {
-      // ── GET /cdp/json[/*] ─────────────────────────────────────────────────
-      // CDP proxy: forwards Chrome's /json endpoints to containers, rewriting
-      // webSocketDebuggerUrl so they point back through this proxy instead of
-      // directly to Chrome (which rejects non-localhost Host headers).
-      if (method === 'GET' && url.pathname.startsWith('/cdp/json')) {
-        const chromePath = url.pathname.replace('/cdp', '');
+      if (isJsonGet) {
         const chromeRes = await fetch(`http://${CDP_HOST}:${CDP_PORT}${chromePath}`);
         if (!chromeRes.ok) {
           jsonResp(res, chromeRes.status, { error: 'Chrome CDP error' });
@@ -398,7 +473,7 @@ export function startHeliumApi(): http.Server {
         const raw = await chromeRes.text();
         const rewritten = raw.replace(
           /ws:\/\/localhost:9222\/devtools\//g,
-          `ws://host.docker.internal:${HELIUM_API_PORT}/cdp/devtools/`,
+          `ws://host.docker.internal:${HELIUM_API_PORT}${wsPrefix}`,
         );
         res.writeHead(chromeRes.status, {
           'Content-Type': 'application/json',
@@ -406,14 +481,12 @@ export function startHeliumApi(): http.Server {
         });
         res.end(rewritten);
         return;
-
-        // ── PUT /cdp/json/new ────────────────────────────────────────────────
-      } else if (method === 'PUT' && url.pathname === '/cdp/json/new') {
+      } else if (isJsonNew) {
         const chromeRes = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new`, { method: 'PUT' });
         const raw = await chromeRes.text();
         const rewritten = raw.replace(
           /ws:\/\/localhost:9222\/devtools\//g,
-          `ws://host.docker.internal:${HELIUM_API_PORT}/cdp/devtools/`,
+          `ws://host.docker.internal:${HELIUM_API_PORT}${wsPrefix}`,
         );
         res.writeHead(chromeRes.status, {
           'Content-Type': 'application/json',
@@ -1059,6 +1132,70 @@ export function startHeliumApi(): http.Server {
           logger.warn({ err, channel, ts }, '/slack/inspect failed');
           jsonResp(res, 500, { error: 'inspect failed', detail: err instanceof Error ? err.message : String(err) });
         }
+
+        // ── POST /makebo/ticket ──────────────────────────────────────────
+        // Canonical, reliable path for Bo to create tickets in the makebo
+        // Linear workspace (team BO). Bypasses the flaky container Linear MCP
+        // servers and the Unify-authed claude.ai connector: this runs on the
+        // host, uses the real makebo token directly, and always targets BO.
+        // Body: { title, description?, priority? (0-4) }.
+      } else if (method === 'POST' && url.pathname === '/makebo/ticket') {
+        const body = (await readBody(req)) as {
+          title?: string;
+          description?: string;
+          priority?: number;
+        };
+        if (!body.title) {
+          jsonResp(res, 400, { error: 'title is required' });
+          return;
+        }
+        // Makebo token — single source of truth is the linear-makebo MCP
+        // server env in the central DB (same token Bo's config references).
+        let token = '';
+        try {
+          const { getDb } = await import('./db/connection.js');
+          const row = getDb()
+            .prepare("SELECT mcp_servers FROM container_configs WHERE agent_group_id = 'ag-1781074925-webui01'")
+            .get() as { mcp_servers: string } | undefined;
+          const servers = row ? JSON.parse(row.mcp_servers) : {};
+          token = servers['linear-makebo']?.env?.LINEAR_API_TOKEN ?? '';
+        } catch {
+          /* fall through to error */
+        }
+        if (!token) {
+          jsonResp(res, 500, { error: 'makebo Linear token not configured' });
+          return;
+        }
+        const TEAM_ID = '0fa52606-45fb-49de-9083-d6107644295a'; // team BO
+        const input: Record<string, unknown> = { teamId: TEAM_ID, title: body.title };
+        if (body.description) input.description = body.description;
+        if (typeof body.priority === 'number') input.priority = body.priority;
+        try {
+          const lr = await fetch('https://api.linear.app/graphql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: token },
+            body: JSON.stringify({
+              query:
+                'mutation($input: IssueCreateInput!){ issueCreate(input:$input){ success issue{ identifier url } } }',
+              variables: { input },
+            }),
+          });
+          const lj = (await lr.json()) as {
+            data?: { issueCreate?: { issue?: { identifier: string; url: string } } };
+            errors?: unknown;
+          };
+          const issue = lj?.data?.issueCreate?.issue;
+          if (issue?.identifier) {
+            jsonResp(res, 200, { ok: true, identifier: issue.identifier, url: issue.url });
+          } else {
+            jsonResp(res, 502, { error: 'Linear create failed', detail: lj?.errors ?? lj });
+          }
+        } catch (err) {
+          jsonResp(res, 502, {
+            error: 'Linear request failed',
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
       } else {
         jsonResp(res, 404, { error: 'Not found' });
       }
@@ -1072,16 +1209,19 @@ export function startHeliumApi(): http.Server {
     }
   });
 
-  // ── WebSocket proxy for /cdp/devtools/* ────────────────────────────────
-  // Containers connect to ws://host.docker.internal:9224/cdp/devtools/page/<id>
+  // ── WebSocket proxy for /devtools/* (and legacy /cdp/devtools/*) ───────
+  // Containers connect to ws://host.docker.internal:9224/devtools/page/<id>
   // and we pipe that to ws://localhost:9222/devtools/page/<id>, rewriting the
   // Host header so Chrome accepts the connection.
   server.on('upgrade', (req, socket, head) => {
-    if (!req.url?.startsWith('/cdp/devtools/')) {
+    const reqPath = req.url ?? '';
+    const isCdp = reqPath.startsWith('/cdp/devtools/');
+    const isRoot = reqPath.startsWith('/devtools/');
+    if (!isCdp && !isRoot) {
       socket.destroy();
       return;
     }
-    const targetPath = req.url.replace('/cdp', '');
+    const targetPath = isCdp ? reqPath.slice('/cdp'.length) : reqPath;
     const upstream = net.connect(CDP_PORT, CDP_HOST, () => {
       // Forward the upgrade request with Host: localhost so Chrome accepts it
       const headers = [
